@@ -1,0 +1,5 @@
+# sha256 of the wrapper launcher scripts.
+# Gradle publishes checksums for gradle-wrapper.jar but not for these,
+# and they are executed first, on every machine, unread in review.
+a3648413b47ef77af21d5ebc36c687c7d103aaef3e17f33de7d4f080a6f300a3  gradlew
+57931b17dd228e5c24dac90e815d0bf82477e831a4618dfab4136f5446b42a9f  gradlew.bat
