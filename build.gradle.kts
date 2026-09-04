@@ -48,6 +48,10 @@ val emptyModuleCheck by tasks.registering {
     group = "verification"
     description = "Fails if an included subproject has no main sources."
     doLast {
+        // subprojects only. The root project legitimately has no sources -- it
+        // carries configuration, not code -- so it is excluded by intent rather
+        // than by oversight. Stating that here because an unexplained filter is
+        // indistinguishable from a missed case.
         val empty = subprojects.filter { sp ->
             val srcDir = sp.file("src/main/java")
             !srcDir.exists() || srcDir.walkTopDown().none { it.isFile && it.extension == "java" }

@@ -1,11 +1,15 @@
 # dora-loop
 
-A delivery pipeline that measures itself.
+A library that computes the four DORA metrics — deployment frequency, lead time
+for changes, change failure rate, and time to restore — from deployment and
+incident events.
 
-`dora-loop` computes the four DORA metrics — deployment frequency, lead time for
-changes, change failure rate, and time to restore — from deployment and incident
-events. It is deployed by the GitHub Actions pipeline that feeds it, so the
-pipeline is both the subject and the source of its own measurements.
+**Status: `core` only.** The domain model and the metrics are built and tested.
+There is no service, no ingest, no persistence, and no deploy step: CI runs gates
+and publishes reports, and `DoraCalculator` has no caller outside the test suite.
+The intended end state is that the pipeline deploying this service also posts its
+own deployment events back into it — the pipeline as both subject and source of
+its own measurements. That loop is **not built**. See the Roadmap.
 
 ## Why it exists
 
@@ -29,17 +33,26 @@ Both failures are silent in the usual implementation, and both read as health.
 
 Open incidents are excluded from time-to-restore rather than counted as zero.
 Counting an unresolved incident as a zero-duration restore would let an ongoing
-outage *improve* the number. There is a test named exactly that.
+outage *improve* the number. Two tests cover it: "an open incident does not count
+as a zero-duration restore" and "only open incidents means UNOBSERVED, never a
+healthy zero".
 
-Lead time is measured from **commit-authored time**, not deploy time, which
-means the pipeline has to carry `git log -1 --format=%aI` through to the event.
-Most implementations skip this and quietly measure something else.
+Lead time is measured per **change**, from each commit's author date. A
+deployment carries every commit in the range since the last one, so a two-week
+branch is not collapsed into the minutes since its final "fix typo" commit.
+
+This is why the obvious integration is wrong: `git log -1 --format=%aI` returns
+the merge commit on a squash or merge, which reports a lead time near zero. The
+pipeline has to track the previously deployed SHA and pass the whole range. See
+[ADR 0002](docs/adr/0002-lead-time-is-per-change.md).
 
 ## Verification
 
 Every guard has a negative control — a test asserting it *rejects* the bad case,
 not merely that the good case passes. A constraint never observed refusing
-anything is not known to work.
+anything is not known to work. That covers all four `Metric` invariants and the
+four remaining domain guards: incident ordering, non-positive windows,
+`Metric.observed` with no observations, and the median of an empty list.
 
 The guards are additionally verified by perturbation: remove the
 zero-observations check and `MetricTest` goes red; count open incidents as
@@ -58,8 +71,18 @@ Requires JDK 21. Gradle comes from the wrapper — nothing to install.
 
 ```
 core/   Domain model and the four metrics. No Spring, no I/O — pure and directly testable.
-api/    Spring Boot service: event ingest, metrics endpoint, actuator health.
 ```
+
+A module is added to `settings.gradle.kts` only once it contains sources. An
+included module with no source set reports `NO-SOURCE` and still rolls up into
+`BUILD SUCCESSFUL` — the same defect class this project is about — so
+`emptyModuleCheck` in the root build fails if that rule is broken.
+
+## Roadmap
+
+- `api` — Spring Boot service: event ingest, metrics endpoint, actuator health
+- A deploy step in the pipeline that posts its own `DeploymentEvent` back here,
+  which is what closes the loop the name refers to
 
 ## License
 
