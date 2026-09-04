@@ -1,4 +1,4 @@
-package dev.novaproject.doraloop.core;
+package io.github.jjackson0118.doraloop.core;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -9,15 +9,15 @@ import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.List;
 
-import static dev.novaproject.doraloop.core.TestEvents.NOW;
-import static dev.novaproject.doraloop.core.TestEvents.blaming;
-import static dev.novaproject.doraloop.core.TestEvents.open;
-import static dev.novaproject.doraloop.core.TestEvents.prodDeploy;
-import static dev.novaproject.doraloop.core.TestEvents.prodDeployWith;
-import static dev.novaproject.doraloop.core.TestEvents.redeploy;
-import static dev.novaproject.doraloop.core.TestEvents.resolved;
-import static dev.novaproject.doraloop.core.TestEvents.skewedDeploy;
-import static dev.novaproject.doraloop.core.TestEvents.stagingDeploy;
+import static io.github.jjackson0118.doraloop.core.TestEvents.NOW;
+import static io.github.jjackson0118.doraloop.core.TestEvents.blaming;
+import static io.github.jjackson0118.doraloop.core.TestEvents.open;
+import static io.github.jjackson0118.doraloop.core.TestEvents.prodDeploy;
+import static io.github.jjackson0118.doraloop.core.TestEvents.prodDeployWith;
+import static io.github.jjackson0118.doraloop.core.TestEvents.redeploy;
+import static io.github.jjackson0118.doraloop.core.TestEvents.resolved;
+import static io.github.jjackson0118.doraloop.core.TestEvents.skewedDeploy;
+import static io.github.jjackson0118.doraloop.core.TestEvents.stagingDeploy;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DoraCalculatorTest {

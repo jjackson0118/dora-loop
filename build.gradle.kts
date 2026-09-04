@@ -5,7 +5,7 @@ plugins {
 }
 
 allprojects {
-    group = "dev.novaproject.doraloop"
+    group = "io.github.jjackson0118"
     version = "0.1.0-SNAPSHOT"
 
     repositories {

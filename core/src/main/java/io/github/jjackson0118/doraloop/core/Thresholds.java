@@ -1,4 +1,4 @@
-package dev.novaproject.doraloop.core;
+package io.github.jjackson0118.doraloop.core;
 
 /**
  * Where each metric stops being acceptable.
