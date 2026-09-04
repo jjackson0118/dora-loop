@@ -1,0 +1,19 @@
+# This repository does not define its own gates. It consumes the paved road
+# from delivery-gates, so a gate improvement arrives here through a version
+# bump rather than through an edit to this file.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    uses: jjackson0118/delivery-gates/.github/workflows/reusable-jvm-pipeline.yml@main
+    with:
+      java-version: "21"
+      gates-ref: main
