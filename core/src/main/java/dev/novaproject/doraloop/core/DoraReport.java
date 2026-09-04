@@ -13,7 +13,8 @@ public record DoraReport(
         Metric deploymentFrequency,
         Metric leadTimeForChanges,
         Metric changeFailureRate,
-        Metric timeToRestore
+        Metric timeToRestore,
+        Metric suspectChanges
 ) {
     public DoraReport {
         Objects.requireNonNull(service, "service");
@@ -23,10 +24,25 @@ public record DoraReport(
         Objects.requireNonNull(leadTimeForChanges, "leadTimeForChanges");
         Objects.requireNonNull(changeFailureRate, "changeFailureRate");
         Objects.requireNonNull(timeToRestore, "timeToRestore");
+        Objects.requireNonNull(suspectChanges, "suspectChanges");
     }
 
+    /** The four DORA metrics. */
     public List<Metric> metrics() {
         return List.of(deploymentFrequency, leadTimeForChanges, changeFailureRate, timeToRestore);
+    }
+
+    /**
+     * The four metrics plus the data-quality signal.
+     *
+     * <p>{@code suspectChanges} is not a DORA metric, but it governs whether the
+     * DORA metrics can be believed. Ingest quality that is not itself a signal
+     * is a blind spot in exactly the place a blind spot is most expensive.
+     */
+    public List<Metric> allSignals() {
+        List<Metric> all = new java.util.ArrayList<>(metrics());
+        all.add(suspectChanges);
+        return List.copyOf(all);
     }
 
     public Duration window() {
@@ -35,7 +51,7 @@ public record DoraReport(
 
     /** Metrics currently in a DEGRADED state. Never includes UNOBSERVED. */
     public List<Metric> alerting() {
-        return metrics().stream().filter(Metric::alerting).toList();
+        return allSignals().stream().filter(Metric::alerting).toList();
     }
 
     /**
@@ -44,7 +60,7 @@ public record DoraReport(
      * never be counted alongside the ones that are green.
      */
     public List<Metric> unobserved() {
-        return metrics().stream()
+        return allSignals().stream()
                 .filter(m -> m.state() == SignalState.UNOBSERVED)
                 .toList();
     }
