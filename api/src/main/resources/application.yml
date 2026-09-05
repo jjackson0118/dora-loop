@@ -32,8 +32,15 @@ management:
   endpoint.health:
     probes.enabled: true
     show-details: never
-  # Readiness must include the database. A probe reporting UP while Postgres is
-  # unreachable is this project's own thesis, at the ops layer.
+    # Readiness must include the database, and health.db.enabled alone does NOT
+    # do that. Enabling probes installs AvailabilityProbesHealthEndpointGroups,
+    # whose readiness group contains readinessState and nothing else;
+    # health.db.enabled only adds the indicator to the AGGREGATE endpoint. So
+    # /actuator/health/readiness returned UP with Postgres unreachable, directly
+    # under a comment asserting it could not -- a probe reporting healthy for a
+    # service that cannot serve a single request, which is this project's own
+    # thesis at the ops layer. Measured before and after; asserted by test.
+    group.readiness.include: readinessState,db
   health.db.enabled: true
   info.env.enabled: true
 

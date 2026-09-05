@@ -53,28 +53,95 @@ class EventRepository {
     }
 
     /**
-     * Incidents upsert on id; deployments do not.
-     *
-     * <p>{@code resolvedAt} arrives later, so resolving an incident is a
-     * re-POST of the same id with the field set. That makes retry semantics and
-     * resolution semantics the same code path, and avoids a PATCH endpoint
-     * whose only job is to set one field.
+     * Loads one deployment with its changes, for deciding whether a replay is a
+     * correction or a conflict.
      */
-    void upsertIncident(IncidentEvent e, String payloadHash) {
+    Optional<DeploymentEvent> findDeployment(String id) {
+        List<Change> changes = db.sql("""
+                SELECT commit_sha, authored_at FROM deployment_change
+                WHERE deployment_id = ? ORDER BY ordinal""")
+                .param(id)
+                .query((rs, n) -> new Change(rs.getString(1), rs.getTimestamp(2).toInstant()))
+                .list();
+
+        return db.sql("""
+                SELECT id, service, environment, deployed_at, outcome
+                FROM deployment_event WHERE id = ?""")
+                .param(id)
+                .query((rs, n) -> new DeploymentEvent(
+                        rs.getString("id"), rs.getString("service"), rs.getString("environment"),
+                        changes, rs.getTimestamp("deployed_at").toInstant(),
+                        Outcome.valueOf(rs.getString("outcome"))))
+                .optional();
+    }
+
+    /**
+     * The only field of a recorded deployment that may change.
+     *
+     * <p>A rollback is reported after the deployment it undoes, so the outcome
+     * has to be correctable or the correction is lost. Everything else about a
+     * deployment is a statement about a past event and cannot legitimately
+     * change; the service decides which transitions are legal, and this only
+     * carries them out.
+     */
+    void updateDeploymentOutcome(String id, Outcome outcome, String payloadHash) {
+        int rows = db.sql("UPDATE deployment_event SET outcome = ?, payload_hash = ? WHERE id = ?")
+                .params(outcome.name(), payloadHash, id)
+                .update();
+        if (rows != 1) {
+            throw new IllegalStateException("expected to correct 1 deployment, corrected " + rows);
+        }
+    }
+
+    Optional<IncidentEvent> findIncident(String id) {
+        return db.sql("""
+                SELECT id, service, caused_by_commit_sha, detected_at, resolved_at
+                FROM incident_event WHERE id = ?""")
+                .param(id)
+                .query((rs, n) -> {
+                    Timestamp r = rs.getTimestamp("resolved_at");
+                    return new IncidentEvent(
+                            rs.getString("id"), rs.getString("service"),
+                            rs.getString("caused_by_commit_sha"),
+                            rs.getTimestamp("detected_at").toInstant(),
+                            r == null ? null : r.toInstant());
+                })
+                .optional();
+    }
+
+    void insertIncident(IncidentEvent e, String payloadHash) {
         db.sql("""
                 INSERT INTO incident_event (id, service, caused_by_commit_sha, detected_at, resolved_at, payload_hash)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT (id) DO UPDATE SET
-                    service = EXCLUDED.service,
-                    caused_by_commit_sha = EXCLUDED.caused_by_commit_sha,
-                    detected_at = EXCLUDED.detected_at,
-                    resolved_at = EXCLUDED.resolved_at,
-                    payload_hash = EXCLUDED.payload_hash""")
+                VALUES (?, ?, ?, ?, ?, ?)""")
                 .params(e.id(), e.service(), e.causedByCommitSha(),
                         Timestamp.from(e.detectedAt()),
                         e.resolvedAt() == null ? null : Timestamp.from(e.resolvedAt()),
                         payloadHash)
                 .update();
+    }
+
+    /**
+     * Resolves an open incident, and only an open one.
+     *
+     * <p>The {@code resolved_at IS NULL} predicate is the guard, not a comment:
+     * this used to be an unconditional upsert of every column, so an ordinary
+     * retry of the original open-incident payload set the column back to NULL
+     * and deleted a time-to-restore observation with a 201 in reply. The
+     * service checks the same thing, and the database enforces it -- if a
+     * concurrent request resolved it first, this updates nothing and says so
+     * rather than overwriting a resolution time that is already published.
+     */
+    void resolveIncident(String id, java.time.Instant resolvedAt, String payloadHash) {
+        int rows = db.sql("""
+                UPDATE incident_event SET resolved_at = ?, payload_hash = ?
+                WHERE id = ? AND resolved_at IS NULL""")
+                .params(Timestamp.from(resolvedAt), payloadHash, id)
+                .update();
+        if (rows != 1) {
+            throw new IllegalStateException(
+                    "expected to resolve 1 open incident, resolved " + rows
+                            + " (it may have been resolved concurrently)");
+        }
     }
 
     /**

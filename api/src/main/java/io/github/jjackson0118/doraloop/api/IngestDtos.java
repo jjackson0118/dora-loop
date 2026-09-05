@@ -50,7 +50,23 @@ final class IngestDtos {
     /** A warning is not a rejection. See {@link IngestService}. */
     record Warning(String code, String path, String detail) {}
 
-    record IngestAccepted(String id, boolean stored, List<Warning> warnings) {}
+    /**
+     * What actually happened to this event.
+     *
+     * <p>This was a {@code boolean stored}, and it was the literal {@code true}
+     * at every construction site -- including the branch that detected a
+     * duplicate and wrote nothing. A field whose only job is to report whether
+     * a write happened, and which cannot report that one did not, is
+     * decoration: the same argument {@code Metric} makes about a signal with no
+     * definition of wrong.
+     *
+     * <p>Three states rather than two, because a correction is neither a new
+     * record nor a no-op and a caller reconciling its own view needs to tell
+     * them apart.
+     */
+    enum Disposition { STORED, DUPLICATE, UPDATED }
+
+    record IngestAccepted(String id, Disposition disposition, List<Warning> warnings) {}
 
     private IngestDtos() {}
 }

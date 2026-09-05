@@ -12,13 +12,21 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAttributeSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
+import java.lang.reflect.Modifier;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +59,8 @@ class ApiIntegrationTest {
 
     @Autowired TestRestTemplate http;
     @Autowired JdbcClient db;
+    @Autowired TransactionAttributeSource transactionAttributes;
+    @Autowired org.springframework.boot.actuate.health.HealthEndpointGroups healthGroups;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -120,6 +130,118 @@ class ApiIntegrationTest {
         assertThat(metric(report, "time_to_restore").get("observedN").asInt()).isEqualTo(1);
         assertThat(metric(report, "time_to_restore").get("value").asDouble()).isBetween(0.4, 0.6);
         assertThat(metric(report, "change_failure_rate").get("observedN").asInt()).isEqualTo(1);
+    }
+
+    // --- the write boundary ------------------------------------------------
+
+    /**
+     * A write that fails partway through leaves nothing behind.
+     *
+     * <p>{@code insertDeployment} issues 1 + N statements. Autocommitted
+     * individually, a failure after the parent insert would leave a deployment
+     * row with some or none of its changes -- permanently. That deployment
+     * counts toward deployment frequency and contributes no lead-time
+     * observation, which is exactly what a legal redeploy looks like. The
+     * corruption would render as fewer observations, never as an error, which
+     * is why it is worth a fault-injection test rather than a code reading.
+     *
+     * <p>The failure is injected with a trigger rather than a mock, because the
+     * thing under test is the boundary between this JVM and Postgres; a mocked
+     * repository would prove only that the mock was called.
+     */
+    @Test
+    void aFailedWriteLeavesNoPartialDeployment() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+
+        db.sql("""
+                CREATE OR REPLACE FUNCTION fail_on_marked_change() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.commit_sha = 'INJECTED-FAILURE' THEN
+                        RAISE EXCEPTION 'injected mid-write failure';
+                    END IF;
+                    RETURN NEW;
+                END; $$ LANGUAGE plpgsql
+                """).update();
+        db.sql("""
+                CREATE TRIGGER fail_on_marked_change_trigger
+                BEFORE INSERT ON deployment_change
+                FOR EACH ROW EXECUTE FUNCTION fail_on_marked_change()
+                """).update();
+        try {
+            ResponseEntity<String> res = postDeployment(eventId, service, "production",
+                    deployedAt, "SUCCESS", """
+                        {"commitSha":"written-first","authoredAt":"%s"},
+                        {"commitSha":"INJECTED-FAILURE","authoredAt":"%s"}
+                    """.formatted(deployedAt.minus(3, ChronoUnit.HOURS),
+                                  deployedAt.minus(2, ChronoUnit.HOURS)));
+
+            assertThat(res.getStatusCode().is5xxServerError())
+                    .as("an injected database failure is a server error")
+                    .isTrue();
+
+            assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
+                    .param(eventId).query(Integer.class).single())
+                    .as("the parent row must not survive a failed write")
+                    .isZero();
+            assertThat(db.sql("SELECT count(*) FROM deployment_change WHERE deployment_id = ?")
+                    .param(eventId).query(Integer.class).single())
+                    .as("no change row may survive either")
+                    .isZero();
+
+            assertThat(metric(report(service), "deployment_frequency").get("state").asText())
+                    .as("and the metric never saw it")
+                    .isEqualTo("UNOBSERVED");
+        } finally {
+            db.sql("DROP TRIGGER IF EXISTS fail_on_marked_change_trigger ON deployment_change").update();
+            db.sql("DROP FUNCTION IF EXISTS fail_on_marked_change()").update();
+        }
+    }
+
+    /**
+     * Every {@code @Transactional} method in this package resolves a real
+     * transaction attribute, asked of the container's own bean.
+     *
+     * <p>This pins a framework default the code depends on and is easy to get
+     * wrong in both directions. Spring's long-standing guidance is that
+     * proxy-based transactions apply to public methods only, and a
+     * hand-constructed {@code AnnotationTransactionAttributeSource} does default
+     * to {@code publicMethodsOnly = true} -- but the bean Spring Boot actually
+     * configures for CGLIB proxies is constructed with {@code false}, and the
+     * package-private ingest methods are advised correctly. A review that reads
+     * the annotation source in isolation concludes the opposite and is wrong.
+     *
+     * <p>So the assertion is made against {@code ctx.getBean(...)}, never
+     * against a new instance: the question is what this application resolves,
+     * not what a default constructor would. If a future Spring version or a
+     * configuration change flips that default, this fails loudly instead of the
+     * boundary quietly disappearing.
+     */
+    @Test
+    void everyTransactionalMethodResolvesARealAttribute() throws Exception {
+        List<String> examined = new ArrayList<>();
+        List<String> inert = new ArrayList<>();
+
+        ClassPathScanningCandidateComponentProvider scanner =
+                new ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter((reader, factory) -> true);
+        for (BeanDefinition bd : scanner.findCandidateComponents(
+                "io.github.jjackson0118.doraloop.api")) {
+            Class<?> type = Class.forName(bd.getBeanClassName());
+            for (Method m : type.getDeclaredMethods()) {
+                if (!m.isAnnotationPresent(Transactional.class)) continue;
+                examined.add(type.getSimpleName() + "." + m.getName());
+                if (transactionAttributes.getTransactionAttribute(m, type) == null) {
+                    inert.add(type.getSimpleName() + "." + m.getName()
+                            + " (" + Modifier.toString(m.getModifiers()) + ")");
+                }
+            }
+        }
+
+        // An empty scan is not a pass -- the vacuity rule, inside a test.
+        assertThat(examined).as("@Transactional methods examined").isNotEmpty();
+        assertThat(inert).as("@Transactional methods Spring would not advise").isEmpty();
     }
 
     // --- the central claim, through the wire -------------------------------
@@ -224,10 +346,17 @@ class ApiIntegrationTest {
                     {"commitSha":"eeee","authoredAt":"%s"}
                 """.formatted(deployedAt.minus(1, ChronoUnit.HOURS));
 
-        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
-                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
-                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        ResponseEntity<String> first =
+                postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(parse(first.getBody()).get("disposition").asText()).isEqualTo("STORED");
+
+        // 200, not 201. A retry created nothing, and a client counting 201s to
+        // know how many deployments it recorded would be counting retries.
+        ResponseEntity<String> retry =
+                postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+        assertThat(retry.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(retry.getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
 
         assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
                 .param(eventId).query(Integer.class).single()).isEqualTo(1);
@@ -253,6 +382,215 @@ class ApiIntegrationTest {
 
         assertThat(db.sql("SELECT environment FROM deployment_event WHERE id = ?")
                 .param(eventId).query(String.class).single()).isEqualTo("production");
+    }
+
+    /**
+     * Two different deployments cannot be made to collide by putting the
+     * separator inside a field value.
+     *
+     * <p>The idempotency digest used to be taken over {@code dto.toString()}. A
+     * record renders as {@code Name[a=1, b=2]}, so {@code ", environment="}
+     * inside a value forges a field boundary and the two payloads below produce
+     * an identical string. Before the canonical encoding, B was treated as a
+     * retry of A: discarded, and answered 201 with {@code stored: true} -- a
+     * production deployment lost while its producer was told it was recorded.
+     * A silent write loss reported as success is the failure this project
+     * exists to argue about, so it gets a test rather than a comment.
+     */
+    @Test
+    void aSeparatorInsideAValueCannotForgeAPayloadMatch() {
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        String change = """
+                    {"commitSha":"aaa","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(2, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, "payments, environment=production", "staging",
+                deployedAt, "SUCCESS", change).getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
+
+        assertThat(postDeployment(eventId, "payments", "production, environment=staging",
+                deployedAt, "SUCCESS", change).getStatusCode())
+                .as("a different deployment reusing the id is a conflict, not a retry")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT environment FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("staging");
+    }
+
+    // --- the readiness probe -----------------------------------------------
+
+    /**
+     * The readiness group actually contains the database.
+     *
+     * <p>{@code management.health.db.enabled} adds the indicator to the
+     * aggregate endpoint only. Enabling probes installs
+     * {@code AvailabilityProbesHealthEndpointGroups}, whose readiness group is
+     * {@code readinessState} and nothing else -- so a readiness probe returned
+     * UP while Postgres was unreachable, and every request would have failed.
+     * The group membership is asserted rather than the response body, because
+     * {@code show-details: never} means a healthy body is identical either way:
+     * the response cannot distinguish "the database was checked and is up" from
+     * "the database was never checked."
+     */
+    @Test
+    void readinessIncludesTheDatabaseAndLivenessDoesNot() {
+        var readiness = healthGroups.get("readiness");
+        assertThat(readiness).isNotNull();
+        assertThat(readiness.isMember("db"))
+                .as("readiness must fail when the database is unreachable")
+                .isTrue();
+        assertThat(readiness.isMember("readinessState")).isTrue();
+
+        // Liveness must NOT include it: a database outage should stop traffic
+        // being routed here, not have the process killed and restarted, which
+        // cannot fix an outage in a different process and turns a degradation
+        // into a crash loop.
+        var liveness = healthGroups.get("liveness");
+        assertThat(liveness).isNotNull();
+        assertThat(liveness.isMember("db"))
+                .as("a database outage must not restart the process")
+                .isFalse();
+    }
+
+    // --- corrections that arrive later --------------------------------------
+
+    /**
+     * A deployment that succeeds and is later rolled back is one deployment
+     * with a corrected outcome.
+     *
+     * <p>This was a 409, and the rollback was dropped. {@code ROLLED_BACK} is
+     * one of only two numerator terms in change failure rate, so refusing the
+     * correction understates CFR -- the service looked better the more often it
+     * had to be rolled back. The bias is always toward flattering the metric,
+     * which is the direction that gets believed.
+     */
+    @Test
+    void aRollbackReportedLaterCorrectsTheDeploymentItUndoes() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(3, ChronoUnit.HOURS);
+        String changes = """
+                    {"commitSha":"abc123","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(2, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<String> corrected =
+                postDeployment(eventId, service, "production", deployedAt, "ROLLED_BACK", changes);
+        assertThat(corrected.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(corrected.getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+
+        assertThat(db.sql("SELECT outcome FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("ROLLED_BACK");
+        assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
+                .param(eventId).query(Integer.class).single())
+                .as("a correction is not a second deployment")
+                .isEqualTo(1);
+
+        // And it reaches the metric it exists to feed.
+        JsonNode report = report(service);
+        assertThat(metric(report, "deployment_frequency").get("observedN").asInt()).isEqualTo(1);
+        assertThat(metric(report, "change_failure_rate").get("value").asDouble()).isEqualTo(100.0);
+    }
+
+    @Test
+    void anOutcomeTransitionThatIsNotACorrectionIs409() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(2, ChronoUnit.HOURS);
+        String changes = """
+                    {"commitSha":"def456","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(1, ChronoUnit.HOURS));
+
+        postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+
+        // FAILED_ROLLOUT means the change never reached production. It cannot
+        // follow a success: a retry that then failed is a different deployment.
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "FAILED_ROLLOUT", changes)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT outcome FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void resolvingAnIncidentLaterIsAnUpdateNotACreate() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        assertThat(postIncident(incidentId, service, "abc", detected, null)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(metric(report(service), "time_to_restore").get("state").asText())
+                .as("an open incident contributes no restore observation")
+                .isEqualTo("UNOBSERVED");
+
+        ResponseEntity<String> resolved = postIncident(
+                incidentId, service, "abc", detected, detected.plus(45, ChronoUnit.MINUTES));
+        assertThat(resolved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(resolved.getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+
+        assertThat(metric(report(service), "time_to_restore").get("value").asDouble())
+                .isBetween(0.7, 0.8);
+    }
+
+    /**
+     * A retry of the original open-incident payload cannot un-resolve it.
+     *
+     * <p>The write was an unconditional upsert of every column, so re-POSTing
+     * the event as first sent -- an ordinary thing for a pipeline to do on
+     * retry -- set {@code resolved_at} back to NULL. That silently deleted a
+     * time-to-restore observation and answered 201 with no warning: the metric
+     * went down because the measurement disappeared, not because anything
+     * improved.
+     */
+    @Test
+    void aRetryOfTheOpenPayloadCannotUnResolveAnIncident() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+        Instant resolvedAt = detected.plus(30, ChronoUnit.MINUTES);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        assertThat(postIncident(incidentId, service, "abc", detected, resolvedAt)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(postIncident(incidentId, service, "abc", detected, null)
+                .getStatusCode())
+                .as("a payload omitting resolvedAt must not clear it")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT resolved_at IS NOT NULL FROM incident_event WHERE id = ?")
+                .param(incidentId).query(Boolean.class).single()).isTrue();
+        assertThat(metric(report(service), "time_to_restore").get("observedN").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void anIncidentResolutionCannotBeMovedOnceSet() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        postIncident(incidentId, service, "abc", detected, detected.plus(30, ChronoUnit.MINUTES));
+
+        assertThat(postIncident(incidentId, service, "abc", detected, detected.plus(5, ChronoUnit.MINUTES))
+                .getStatusCode())
+                .as("a published restore time cannot be rewritten")
+                .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void changingAnIncidentsDetectionTimeIs409NotASilentOverwrite() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        assertThat(postIncident(incidentId, service, "abc", detected.minus(1, ChronoUnit.HOURS), null)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
     }
 
     // --- strictness survives the framework ---------------------------------

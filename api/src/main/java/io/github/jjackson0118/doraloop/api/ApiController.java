@@ -33,12 +33,27 @@ class ApiController {
 
     @PostMapping("/deployments")
     ResponseEntity<IngestDtos.IngestAccepted> deployments(@Valid @RequestBody IngestDtos.DeploymentDto dto) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(ingest.accept(dto));
+        return respond(ingest.accept(dto));
     }
 
     @PostMapping("/incidents")
     ResponseEntity<IngestDtos.IngestAccepted> incidents(@Valid @RequestBody IngestDtos.IncidentDto dto) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(ingest.accept(dto));
+        return respond(ingest.accept(dto));
+    }
+
+    /**
+     * 201 only when something was created.
+     *
+     * <p>Every ingest used to answer 201 Created, including the branch that
+     * found a duplicate and wrote nothing. 201 is a claim that a resource came
+     * into existence, and a client that trusts it -- to count deployments it
+     * successfully recorded, say -- is counting retries.
+     */
+    private static ResponseEntity<IngestDtos.IngestAccepted> respond(IngestDtos.IngestAccepted a) {
+        HttpStatus status = a.disposition() == IngestDtos.Disposition.STORED
+                ? HttpStatus.CREATED
+                : HttpStatus.OK;
+        return ResponseEntity.status(status).body(a);
     }
 
     /**
