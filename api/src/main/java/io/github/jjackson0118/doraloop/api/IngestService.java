@@ -66,6 +66,13 @@ class IngestService {
                     "outcome must be one of SUCCESS, FAILED_ROLLOUT, ROLLED_BACK");
         }
 
+        rejectIllFormed("id", dto.id());
+        rejectIllFormed("service", dto.service());
+        rejectIllFormed("environment", dto.environment());
+        for (int i = 0; i < dto.changes().size(); i++) {
+            rejectIllFormed("changes[" + i + "].commitSha", dto.changes().get(i).commitSha());
+        }
+
         List<Change> changes = dto.changes().stream()
                 .map(c -> new Change(c.commitSha(), storable(c.authoredAt()))).toList();
         DeploymentEvent event = new DeploymentEvent(
@@ -121,6 +128,10 @@ class IngestService {
      */
     @Transactional
     IngestDtos.IngestAccepted accept(IngestDtos.IncidentDto dto) {
+        rejectIllFormed("id", dto.id());
+        rejectIllFormed("service", dto.service());
+        rejectIllFormed("causedByCommitSha", dto.causedByCommitSha());
+
         IncidentEvent event = new IncidentEvent(
                 dto.id(), dto.service(), dto.causedByCommitSha(),
                 storable(dto.detectedAt()), storable(dto.resolvedAt()));
@@ -205,6 +216,43 @@ class IngestService {
     }
 
     /**
+     * Refuses text that cannot survive being stored.
+     *
+     * <p>An unpaired surrogate is not representable in UTF-8, and both the
+     * digest and PostgreSQL replace it -- so two payloads differing only there
+     * hash identically AND store identically. Accepting one and answering
+     * {@code STORED} would report having recorded something other than what was
+     * sent, which is the failure this module is about.
+     *
+     * <p>This is not in tension with ADR 0003. That decision governs input
+     * whose <em>values</em> are implausible -- a commit authored after its own
+     * deployment -- which is quarantined and counted rather than rejected,
+     * because dropping it would lose a real deployment. This is malformed
+     * <em>encoding</em>, the same class as the unknown-field rejection: there is
+     * no coherent event here to preserve.
+     */
+    private static void rejectIllFormed(String field, String v) {
+        if (v == null) {
+            return;
+        }
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (Character.isHighSurrogate(c)) {
+                if (i + 1 >= v.length() || !Character.isLowSurrogate(v.charAt(i + 1))) {
+                    throw new IllegalArgumentException(
+                            field + " contains an unpaired surrogate at index " + i
+                                    + "; it cannot be stored or digested faithfully");
+                }
+                i++;
+            } else if (Character.isLowSurrogate(c)) {
+                throw new IllegalArgumentException(
+                        field + " contains an unpaired surrogate at index " + i
+                                + "; it cannot be stored or digested faithfully");
+            }
+        }
+    }
+
+    /**
      * Truncated to what Postgres can actually hold.
      *
      * <p>TIMESTAMPTZ is microsecond-precision, so a nanosecond-precision Instant
@@ -238,12 +286,20 @@ class IngestService {
      * Verified against the running service before this was changed.
      *
      * <p>Every field is written as {@code |length|value}, so a value cannot
-     * forge a delimiter: the encoding is injective regardless of content. The
-     * digest is over bytes, never over a human-readable rendering, and the
-     * version tag means a future change to this encoding invalidates old hashes
-     * loudly rather than silently comparing across two schemes.
+     * forge a delimiter: the encoding is injective over well-formed input, and
+     * ill-formed input is refused before it gets here (see
+     * {@link #rejectIllFormed}). The unqualified claim this comment used to
+     * make -- "injective regardless of content" -- was false, because the
+     * digest is taken over encoded bytes and every unpaired surrogate encodes
+     * to the same replacement byte. {@code CanonicalEncodingTest} now asserts
+     * injectivity over an adversarial corpus rather than leaving it asserted
+     * here in prose.
+     *
+     * <p>The digest is over bytes, never over a human-readable rendering, and
+     * the version tag means a future change to this encoding invalidates old
+     * hashes loudly rather than silently comparing across two schemes.
      */
-    private static String canonical(IngestDtos.DeploymentDto d) {
+    static String canonical(IngestDtos.DeploymentDto d) {
         StringBuilder sb = new StringBuilder("deployment/v1");
         field(sb, d.id());
         field(sb, d.service());
@@ -258,7 +314,7 @@ class IngestService {
         return sb.toString();
     }
 
-    private static String canonical(IngestDtos.IncidentDto d) {
+    static String canonical(IngestDtos.IncidentDto d) {
         StringBuilder sb = new StringBuilder("incident/v1");
         field(sb, d.id());
         field(sb, d.service());

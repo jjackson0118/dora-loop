@@ -12,6 +12,8 @@ import java.util.List;
 import static io.github.jjackson0118.doraloop.core.TestEvents.NOW;
 import static io.github.jjackson0118.doraloop.core.TestEvents.blaming;
 import static io.github.jjackson0118.doraloop.core.TestEvents.open;
+import static io.github.jjackson0118.doraloop.core.TestEvents.otherServiceDeploy;
+import static io.github.jjackson0118.doraloop.core.TestEvents.otherServiceIncident;
 import static io.github.jjackson0118.doraloop.core.TestEvents.prodDeploy;
 import static io.github.jjackson0118.doraloop.core.TestEvents.prodDeployWith;
 import static io.github.jjackson0118.doraloop.core.TestEvents.redeploy;
@@ -26,6 +28,50 @@ class DoraCalculatorTest {
 
     private final DoraCalculator calc =
             new DoraCalculator(Clock.fixed(NOW, ZoneOffset.UTC), WINDOW);
+
+
+    @Nested
+    @DisplayName("service scoping")
+    class ServiceScoping {
+
+        /**
+         * Another service's events are not this service's metrics.
+         *
+         * <p>The filter is implemented twice -- here and again in the api
+         * module's SQL -- and each half covered for the other, so either could
+         * be deleted with the whole suite green. Every other fixture in this
+         * class belongs to "dora-loop", so this filter had never been shown a
+         * row it was supposed to reject. A guard never observed refusing
+         * anything is the thing this project argues against.
+         */
+        @Test
+        void anotherServicesEventsAreExcludedFromEveryMetric() {
+            DoraReport r = calc.calculate("dora-loop",
+                    List.of(prodDeploy("mine", NOW.minus(Duration.ofDays(1)), 2, Outcome.SUCCESS),
+                            otherServiceDeploy("theirs", NOW.minus(Duration.ofDays(1)))),
+                    List.of(otherServiceIncident("theirs-i", NOW.minus(Duration.ofDays(1)))));
+
+            assertThat(r.deploymentFrequency().observedN())
+                    .as("only this service's deployment is counted").isEqualTo(1);
+            assertThat(r.leadTimeForChanges().observedN())
+                    .as("only this service's change is an observation").isEqualTo(1);
+            assertThat(r.timeToRestore().state())
+                    .as("another service's incident is not a restore here")
+                    .isEqualTo(SignalState.UNOBSERVED);
+            assertThat(r.changeFailureRate().observedN()).isEqualTo(1);
+        }
+
+        /** And with only foreign events, everything is UNOBSERVED, not zero. */
+        @Test
+        void onlyForeignEventsMeansUnobservedNotZero() {
+            DoraReport r = calc.calculate("dora-loop",
+                    List.of(otherServiceDeploy("theirs", NOW.minus(Duration.ofDays(1)))),
+                    List.of(otherServiceIncident("theirs-i", NOW.minus(Duration.ofDays(1)))));
+
+            assertThat(r.metrics()).allSatisfy(m ->
+                    assertThat(m.state()).isEqualTo(SignalState.UNOBSERVED));
+        }
+    }
 
     @Nested
     @DisplayName("with no data at all")
