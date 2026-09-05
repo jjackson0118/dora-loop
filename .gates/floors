@@ -20,7 +20,9 @@ docs=3
 # gradle-wrapper.jar, gradlew, gradlew.bat, and the distribution checksum.
 gradle-wrapper=4
 
-# Tests actually executed, not declared. Currently 85.
+# Tests actually executed, not declared. No current count is written here:
+# it was 85 when this line was added, measured on a working tree, and was wrong
+# within two commits. The floor is the claim; the count is printed by the run.
 jvm-test=60
 
 # Commits in the scanned range -- and the range depends on the mode, which is
