@@ -27,6 +27,12 @@ import java.lang.reflect.Modifier;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -945,6 +951,194 @@ class ApiIntegrationTest {
         JsonNode report = report(service);
         assertThat(metric(report, "data_quality.suspect_incidents").get("value").asDouble()).isEqualTo(1.0);
         assertThat(metric(report, "time_to_restore").get("state").asText()).isEqualTo("UNOBSERVED");
+    }
+
+    // --- concurrency --------------------------------------------------------
+
+    /**
+     * Two identical POSTs racing must not produce a server error.
+     *
+     * <p>The check-then-insert is not atomic on its own, and a transaction does
+     * not make it so: it converts a silent overwrite into a duplicate-key
+     * violation. Measured before the fix, with two threads released from a
+     * barrier: 201 plus an unhandled 500, in 12 of 12 rounds. That is the
+     * module's central use case -- a deploy job with at-least-once delivery, or
+     * a retry whose first response was lost -- and a 500 is indistinguishable
+     * from "the write did not happen", so a correct client retries against a
+     * server that already has the data.
+     *
+     * <p>The insert is now ON CONFLICT DO NOTHING and the loser re-reads and
+     * takes the same path a sequential replay takes.
+     */
+    @Test
+    void identicalConcurrentPostsAreNeverAServerError() throws Exception {
+        for (int round = 0; round < 6; round++) {
+            String service = svc();
+            String eventId = id();
+            Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+            String body = """
+                    {"id":"%s","service":"%s","environment":"production","deployedAt":"%s",
+                     "outcome":"SUCCESS","changes":[{"commitSha":"aaa","authoredAt":"%s"}]}
+                    """.formatted(eventId, service, deployedAt, deployedAt.minus(2, ChronoUnit.HOURS));
+
+            List<ResponseEntity<String>> both = race(
+                    () -> post("/api/v1/deployments", body),
+                    () -> post("/api/v1/deployments", body));
+
+            for (ResponseEntity<String> r : both) {
+                assertThat(r.getStatusCode().is5xxServerError())
+                        .as("round %d returned %s", round, r.getStatusCode()).isFalse();
+                assertThat(r.getStatusCode().is2xxSuccessful()).isTrue();
+            }
+            assertThat(both.stream().map(r -> r.getStatusCode().value()).sorted().toList())
+                    .as("one created it, the other recognised the retry")
+                    .containsExactly(200, 201);
+
+            assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
+                    .param(eventId).query(Integer.class).single()).isEqualTo(1);
+            assertThat(db.sql("SELECT count(*) FROM deployment_change WHERE deployment_id = ?")
+                    .param(eventId).query(Integer.class).single()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * A duplicate delivery of a resolution is the most ordinary thing a
+     * retrying incident pipeline does, and it used to be a 500 in 10 of 12
+     * rounds -- an IllegalStateException from the row-count guard, reaching the
+     * client raw.
+     */
+    @Test
+    void concurrentIdenticalResolutionsAreNeverAServerError() throws Exception {
+        for (int round = 0; round < 6; round++) {
+            String service = svc();
+            String incidentId = id();
+            Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+            Instant resolvedAt = detected.plus(30, ChronoUnit.MINUTES);
+            postIncident(incidentId, service, "abc", detected, null);
+
+            List<ResponseEntity<String>> both = race(
+                    () -> postIncident(incidentId, service, "abc", detected, resolvedAt),
+                    () -> postIncident(incidentId, service, "abc", detected, resolvedAt));
+
+            for (ResponseEntity<String> r : both) {
+                assertThat(r.getStatusCode().is5xxServerError())
+                        .as("round %d returned %s", round, r.getStatusCode()).isFalse();
+                assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+            }
+            assertThat(db.sql("SELECT resolved_at FROM incident_event WHERE id = ?")
+                    .param(incidentId).query(Instant.class).single())
+                    .isEqualTo(resolvedAt.truncatedTo(ChronoUnit.MICROS));
+        }
+    }
+
+    /**
+     * Two identical incident CREATIONS racing, which is a different code path
+     * from two racing resolutions.
+     *
+     * <p>Added because a perturbation exposed the gap: removing ON CONFLICT DO
+     * NOTHING from the incident insert broke no test. The resolution race above
+     * creates the incident first and then races the update, so the insert guard
+     * was never the thing under contention. Same defect as the deployment path
+     * -- a duplicate-key violation surfacing as a 500 to a retrying producer --
+     * one table over.
+     */
+    @Test
+    void identicalConcurrentIncidentCreationsAreNeverAServerError() throws Exception {
+        for (int round = 0; round < 6; round++) {
+            String service = svc();
+            String incidentId = id();
+            Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+            List<ResponseEntity<String>> both = race(
+                    () -> postIncident(incidentId, service, "abc", detected, null),
+                    () -> postIncident(incidentId, service, "abc", detected, null));
+
+            for (ResponseEntity<String> r : both) {
+                assertThat(r.getStatusCode().is5xxServerError())
+                        .as("round %d returned %s", round, r.getStatusCode()).isFalse();
+            }
+            assertThat(both.stream().map(r -> r.getStatusCode().value()).sorted().toList())
+                    .as("one created it, the other recognised the retry")
+                    .containsExactly(200, 201);
+
+            assertThat(db.sql("SELECT count(*) FROM incident_event WHERE id = ?")
+                    .param(incidentId).query(Integer.class).single()).isEqualTo(1);
+        }
+    }
+
+    /**
+     * A report is one measurement, not several taken at different moments.
+     *
+     * <p>The deployments and their changes are separate queries. Read outside a
+     * transaction, a deployment committed between them appears with an empty
+     * changes list -- indistinguishable from a legal redeploy, so it renders as
+     * a deployment contributing no lead-time observation rather than as an
+     * error. Measured under four concurrent writers: 348 of 385 reads
+     * disagreed, always in the direction of fewer changes.
+     *
+     * <p>{@code readOnly = true} alone did NOT fix it, which is worth stating
+     * because it is the obvious fix: at READ COMMITTED every statement takes a
+     * fresh snapshot even inside one transaction, and the measurement was
+     * unchanged at 335 of 375. It takes REPEATABLE_READ, and after that the
+     * same probe reported 0 of 360.
+     */
+    @Test
+    void theReportIsReadConsistentUnderConcurrentWrites() throws Exception {
+        String service = svc();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        AtomicBoolean stop = new AtomicBoolean(false);
+        List<Future<?>> writers = new ArrayList<>();
+        for (int w = 0; w < 3; w++) {
+            writers.add(pool.submit(() -> {
+                while (!stop.get()) {
+                    Instant t = Instant.now().minus(1, ChronoUnit.HOURS);
+                    postDeployment(id(), service, "production", t, "SUCCESS", """
+                                {"commitSha":"%s","authoredAt":"%s"}
+                            """.formatted(id(), t.minus(2, ChronoUnit.HOURS)));
+                }
+                return null;
+            }));
+        }
+
+        int reads = 0;
+        int inconsistent = 0;
+        try {
+            long until = System.currentTimeMillis() + 4_000;
+            while (System.currentTimeMillis() < until) {
+                JsonNode report = report(service);
+                int deploys = metric(report, "deployment_frequency").get("observedN").asInt();
+                int leads = metric(report, "lead_time_for_changes").get("observedN").asInt();
+                reads++;
+                if (deploys != leads) inconsistent++;
+            }
+        } finally {
+            stop.set(true);
+            for (Future<?> f : writers) f.get();
+            pool.shutdownNow();
+        }
+
+        // Every deployment here carries exactly one change, so a consistent read
+        // must report the two counts equal.
+        assertThat(reads).as("the probe must actually have read something").isGreaterThan(20);
+        assertThat(inconsistent)
+                .as("%d of %d reads saw a deployment without its changes", inconsistent, reads)
+                .isZero();
+    }
+
+    private List<ResponseEntity<String>> race(Callable<ResponseEntity<String>> a,
+                                              Callable<ResponseEntity<String>> b) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CyclicBarrier gate = new CyclicBarrier(2);
+        try {
+            List<Future<ResponseEntity<String>>> futures = pool.invokeAll(List.of(
+                    (Callable<ResponseEntity<String>>) () -> { gate.await(); return a.call(); },
+                    (Callable<ResponseEntity<String>>) () -> { gate.await(); return b.call(); }));
+            List<ResponseEntity<String>> out = new ArrayList<>();
+            for (Future<ResponseEntity<String>> f : futures) out.add(f.get());
+            return out;
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     // --- the window --------------------------------------------------------
