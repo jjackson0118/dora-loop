@@ -83,9 +83,20 @@ class IngestService {
         Optional<String> existing = repo.existingDeploymentHash(dto.id());
 
         if (existing.isEmpty()) {
-            repo.insertDeployment(event, hash);
-            return new IngestDtos.IngestAccepted(
-                    dto.id(), IngestDtos.Disposition.STORED, warningsFor(event));
+            if (repo.insertDeployment(event, hash)) {
+                return new IngestDtos.IngestAccepted(
+                        dto.id(), IngestDtos.Disposition.STORED, warningsFor(event));
+            }
+            // Lost the race: an identical id was inserted between the check and
+            // the insert. Re-read and fall through to exactly the same
+            // comparison a sequential replay takes, so a concurrent retry gets
+            // DUPLICATE and a concurrent conflict gets 409 -- rather than the
+            // 500 this produced in 12 of 12 measured rounds.
+            existing = repo.existingDeploymentHash(dto.id());
+            if (existing.isEmpty()) {
+                throw new IllegalStateException(
+                        "insert conflicted on " + dto.id() + " but no row is visible");
+            }
         }
         if (existing.get().equals(hash)) {
             return new IngestDtos.IngestAccepted(
@@ -140,9 +151,12 @@ class IngestService {
         Optional<String> existing = repo.existingIncidentHash(dto.id());
 
         IngestDtos.Disposition disposition;
-        if (existing.isEmpty()) {
-            repo.insertIncident(event, hash);
+        if (existing.isEmpty() && repo.insertIncidentIfAbsent(event, hash)) {
             disposition = IngestDtos.Disposition.STORED;
+        } else if (existing.isEmpty()
+                && (existing = repo.existingIncidentHash(dto.id())).isEmpty()) {
+            throw new IllegalStateException(
+                    "insert conflicted on " + dto.id() + " but no row is visible");
         } else if (existing.get().equals(hash)) {
             disposition = IngestDtos.Disposition.DUPLICATE;
         } else {
@@ -162,13 +176,51 @@ class IngestService {
             // past DUPLICATE above. A perturbation found that: deleting the
             // second guard broke no test, because nothing could reach it.
             if (stored.resolvedAt() != null) {
+                // Already resolved with the SAME time is a retry, not a conflict.
+                //
+                // Found in CI and not locally, by the concurrency test: two
+                // identical resolutions race, the loser re-reads after the
+                // winner commits, and sees a resolved incident. Answering 409
+                // there tells a producer its own successful delivery collided
+                // with something -- for a duplicate delivery of a resolution,
+                // which is the ordinary case this path exists to serve. The
+                // hash check above cannot catch it, because it read the row
+                // before the winner committed.
+                if (stored.resolvedAt().equals(event.resolvedAt())) {
+                    return new IngestDtos.IngestAccepted(
+                            dto.id(), IngestDtos.Disposition.DUPLICATE, warningsForIncident(event, dto));
+                }
                 throw new ConflictingReplay("incident " + dto.id() + " is already resolved at "
                         + stored.resolvedAt() + "; resolution cannot be moved or cleared");
             }
-            repo.resolveIncident(dto.id(), event.resolvedAt(), hash);
-            disposition = IngestDtos.Disposition.UPDATED;
+            if (repo.resolveIncident(dto.id(), event.resolvedAt(), hash)) {
+                disposition = IngestDtos.Disposition.UPDATED;
+            } else {
+                // Someone resolved it between the read above and this update.
+                // Re-read and answer the same way a sequential replay would:
+                // the identical resolution is a retry, a different one is a
+                // conflict. This used to throw IllegalStateException, which
+                // reached the client as a 500 in 10 of 12 measured rounds --
+                // for a duplicate delivery of a resolution, which is the single
+                // most ordinary thing a retrying incident pipeline does.
+                IncidentEvent now = repo.findIncident(dto.id()).orElseThrow(
+                        () -> new IllegalStateException("incident vanished: " + dto.id()));
+                if (event.resolvedAt().equals(now.resolvedAt())) {
+                    disposition = IngestDtos.Disposition.DUPLICATE;
+                } else {
+                    throw new ConflictingReplay("incident " + dto.id()
+                            + " was resolved concurrently at " + now.resolvedAt()
+                            + "; a published restore time cannot be moved");
+                }
+            }
         }
 
+        return new IngestDtos.IngestAccepted(
+                dto.id(), disposition, warningsForIncident(event, dto));
+    }
+
+    private static List<IngestDtos.Warning> warningsForIncident(
+            IncidentEvent event, IngestDtos.IncidentDto dto) {
         List<IngestDtos.Warning> warnings = new ArrayList<>();
         if (!event.isPlausible()) {
             warnings.add(new IngestDtos.Warning(
@@ -176,7 +228,7 @@ class IngestService {
                     "resolvedAt " + dto.resolvedAt() + " precedes detectedAt " + dto.detectedAt()
                             + "; excluded from time to restore, counted by data_quality.suspect_incidents"));
         }
-        return new IngestDtos.IngestAccepted(dto.id(), disposition, warnings);
+        return warnings;
     }
 
     private static boolean differsOnlyByOutcome(DeploymentEvent stored, DeploymentEvent incoming) {

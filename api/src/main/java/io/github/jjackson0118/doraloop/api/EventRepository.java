@@ -35,13 +35,33 @@ class EventRepository {
                 .param(id).query(String.class).optional();
     }
 
-    void insertDeployment(DeploymentEvent e, String payloadHash) {
-        db.sql("""
+    /**
+     * @return false if this id was inserted by someone else first.
+     *
+     * <p>ON CONFLICT DO NOTHING rather than a bare INSERT, because the caller
+     * checks for an existing row and then inserts, and nothing makes those two
+     * statements atomic against a concurrent identical request. Measured before
+     * this changed: two identical POSTs released from a barrier returned
+     * 201 and an unhandled DuplicateKeyException as a 500, in 12 of 12 rounds.
+     * A retrying pipeline cannot act on that -- 500 is indistinguishable from
+     * "the write did not happen" -- and a deploy job with at-least-once
+     * delivery produces exactly this.
+     *
+     * <p>Postgres blocks on the conflicting row until the other transaction
+     * ends, so a false return means it really did commit, and the caller's
+     * re-read will see it.
+     */
+    boolean insertDeployment(DeploymentEvent e, String payloadHash) {
+        int rows = db.sql("""
                 INSERT INTO deployment_event (id, service, environment, deployed_at, outcome, payload_hash)
-                VALUES (?, ?, ?, ?, ?, ?)""")
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING""")
                 .params(e.id(), e.service(), e.environment(),
                         Timestamp.from(e.deployedAt()), e.outcome().name(), payloadHash)
                 .update();
+        if (rows == 0) {
+            return false;
+        }
         int i = 0;
         for (Change c : e.changes()) {
             db.sql("""
@@ -50,6 +70,20 @@ class EventRepository {
                     .params(e.id(), i++, c.commitSha(), Timestamp.from(c.authoredAt()))
                     .update();
         }
+        return true;
+    }
+
+    /** @return false if this id was inserted by someone else first. */
+    boolean insertIncidentIfAbsent(IncidentEvent e, String payloadHash) {
+        return db.sql("""
+                INSERT INTO incident_event (id, service, caused_by_commit_sha, detected_at, resolved_at, payload_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO NOTHING""")
+                .params(e.id(), e.service(), e.causedByCommitSha(),
+                        Timestamp.from(e.detectedAt()),
+                        e.resolvedAt() == null ? null : Timestamp.from(e.resolvedAt()),
+                        payloadHash)
+                .update() == 1;
     }
 
     /**
@@ -109,17 +143,6 @@ class EventRepository {
                 .optional();
     }
 
-    void insertIncident(IncidentEvent e, String payloadHash) {
-        db.sql("""
-                INSERT INTO incident_event (id, service, caused_by_commit_sha, detected_at, resolved_at, payload_hash)
-                VALUES (?, ?, ?, ?, ?, ?)""")
-                .params(e.id(), e.service(), e.causedByCommitSha(),
-                        Timestamp.from(e.detectedAt()),
-                        e.resolvedAt() == null ? null : Timestamp.from(e.resolvedAt()),
-                        payloadHash)
-                .update();
-    }
-
     /**
      * Resolves an open incident, and only an open one.
      *
@@ -131,17 +154,12 @@ class EventRepository {
      * concurrent request resolved it first, this updates nothing and says so
      * rather than overwriting a resolution time that is already published.
      */
-    void resolveIncident(String id, java.time.Instant resolvedAt, String payloadHash) {
-        int rows = db.sql("""
+    boolean resolveIncident(String id, java.time.Instant resolvedAt, String payloadHash) {
+        return db.sql("""
                 UPDATE incident_event SET resolved_at = ?, payload_hash = ?
                 WHERE id = ? AND resolved_at IS NULL""")
                 .params(Timestamp.from(resolvedAt), payloadHash, id)
-                .update();
-        if (rows != 1) {
-            throw new IllegalStateException(
-                    "expected to resolve 1 open incident, resolved " + rows
-                            + " (it may have been resolved concurrently)");
-        }
+                .update() == 1;
     }
 
     /**

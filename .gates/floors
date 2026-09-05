@@ -1,0 +1,40 @@
+# What this repository's gates cover, declared by this repository.
+#
+# Every gate already refuses to pass on a zero denominator. This file catches
+# the other direction: a gate that still runs but examines LESS than it used
+# to, or one that decides the repository is out of scope entirely and returns
+# "not applicable" -- which the CI adapter maps to success, because for an
+# orchestrator there is no third state.
+#
+# Floors are minimums with deliberate headroom. A floor set to today's exact
+# count goes red on the next commit that deletes a file for a good reason, and
+# a check that cries wolf gets removed. These sit below current values and are
+# raised when the gap stops being informative.
+#
+# n/a is a positive declaration that a gate does not apply here, not a way to
+# opt out of one that does. A gate with no entry at all is an error.
+
+# Markdown files carrying claims the docs gate verifies.
+docs=3
+
+# gradle-wrapper.jar, gradlew, gradlew.bat, and the distribution checksum.
+gradle-wrapper=4
+
+# Tests actually executed, not declared. Currently 85.
+jvm-test=60
+
+# Commits in the scanned range -- and the range depends on the mode, which is
+# why this is 1 rather than a number that looks more impressive.
+#
+# The reusable pipeline runs this gate with GATE_SECRETS_MODE=diff, so its
+# denominator is the size of the change under review, not the depth of history:
+# a one-commit PR legitimately scans one commit. A floor of 15, taken from a
+# local history-mode run, failed the first PR it saw -- correctly, and the fault
+# was the floor. A change-scoped gate cannot carry a meaningful minimum, and the
+# thing actually protecting it is the vacuity rule in lib/gate.sh, which turns a
+# zero denominator into exit 2. Declaring 1 says that out loud rather than
+# implying coverage this number cannot give.
+secrets=1
+
+# Shell files. This is a JVM project, so the count is small and stable.
+shellcheck=1
