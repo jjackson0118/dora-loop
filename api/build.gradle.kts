@@ -3,6 +3,15 @@ plugins {
     id("io.spring.dependency-management")
 }
 
+// Overrides the version Boot 3.3.4 manages (1.19.8), which cannot talk to a
+// modern engine: its bundled docker-java negotiates Docker API 1.32, and
+// Docker 29 refuses anything below 1.44 with "client version is too old".
+// Pinned explicitly rather than left to the BOM because the failure is
+// environment-dependent -- a CI runner on an older engine would go green while
+// a developer on a current one could not run the suite at all, which is the
+// local-vs-CI divergence this project has already been bitten by once.
+extra["testcontainers.version"] = "1.21.4"
+
 dependencies {
     implementation(project(":core"))
 
@@ -18,6 +27,14 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // A real Postgres, because the parts of this module that can be wrong are
+    // the parts an ObjectMapper never touches: the migration, the SQL, the
+    // transaction boundaries, and the status codes. An in-memory H2 would run
+    // faster and would not be running this schema.
+    testImplementation("org.springframework.boot:spring-boot-testcontainers")
+    testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("org.testcontainers:postgresql")
 }
 
 // The deployed artifact must be able to say which commit it is, and the smoke
