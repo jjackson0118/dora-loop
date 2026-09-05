@@ -20,10 +20,17 @@ public final class DoraCalculator {
 
     private final Clock clock;
     private final Duration window;
+    private final Thresholds thresholds;
 
+    /** Uses {@link Thresholds#defaults()}. */
     public DoraCalculator(Clock clock, Duration window) {
+        this(clock, window, Thresholds.defaults());
+    }
+
+    public DoraCalculator(Clock clock, Duration window, Thresholds thresholds) {
         this.clock = Objects.requireNonNull(clock, "clock");
         this.window = Objects.requireNonNull(window, "window");
+        this.thresholds = Objects.requireNonNull(thresholds, "thresholds");
         if (window.isZero() || window.isNegative()) {
             throw new IllegalArgumentException("window must be positive, got " + window);
         }
@@ -67,13 +74,14 @@ public final class DoraCalculator {
                 leadTimeForChanges(prodDeploys),
                 changeFailureRate(prodDeploys, serviceIncidents),
                 timeToRestore(windowIncidents),
-                suspectChanges(prodDeploys));
+                suspectChanges(prodDeploys),
+                suspectIncidents(windowIncidents));
     }
 
     private Metric deploymentFrequency(List<DeploymentEvent> prodDeploys) {
         String name = "deployment_frequency";
         String unit = "deploys/day";
-        String wrong = "< " + Thresholds.DEPLOY_FREQ_MIN_PER_DAY + " " + unit;
+        String wrong = "< " + thresholds.deployFrequencyMinPerDay() + " " + unit;
 
         if (prodDeploys.isEmpty()) {
             return Metric.unobserved(name, unit, wrong);
@@ -81,7 +89,7 @@ public final class DoraCalculator {
         double days = window.toSeconds() / 86_400.0;
         double perDay = round(prodDeploys.size() / days);
         return Metric.observed(name, perDay, unit, prodDeploys.size(),
-                perDay < Thresholds.DEPLOY_FREQ_MIN_PER_DAY, wrong);
+                perDay < thresholds.deployFrequencyMinPerDay(), wrong);
     }
 
     /**
@@ -99,7 +107,7 @@ public final class DoraCalculator {
     private Metric leadTimeForChanges(List<DeploymentEvent> prodDeploys) {
         String name = "lead_time_for_changes";
         String unit = "hours";
-        String wrong = "> " + Thresholds.LEAD_TIME_MAX_HOURS + " " + unit + " (median)";
+        String wrong = "> " + thresholds.leadTimeMaxHours() + " " + unit + " (median)";
 
         List<Double> hours = new ArrayList<>();
         for (DeploymentEvent d : prodDeploys) {
@@ -119,7 +127,7 @@ public final class DoraCalculator {
         }
         double median = round(median(hours));
         return Metric.observed(name, median, unit, hours.size(),
-                median > Thresholds.LEAD_TIME_MAX_HOURS, wrong);
+                median > thresholds.leadTimeMaxHours(), wrong);
     }
 
     /**
@@ -138,7 +146,7 @@ public final class DoraCalculator {
     private Metric changeFailureRate(List<DeploymentEvent> prodDeploys, List<IncidentEvent> incidents) {
         String name = "change_failure_rate";
         String unit = "percent";
-        String wrong = "> " + Thresholds.CHANGE_FAILURE_MAX_PERCENT + " " + unit;
+        String wrong = "> " + thresholds.changeFailureMaxPercent() + " " + unit;
 
         List<DeploymentEvent> reached = prodDeploys.stream()
                 .filter(d -> d.outcome().reachedProduction())
@@ -160,7 +168,7 @@ public final class DoraCalculator {
 
         double pct = round((failures * 100.0) / reached.size());
         return Metric.observed(name, pct, unit, reached.size(),
-                pct > Thresholds.CHANGE_FAILURE_MAX_PERCENT, wrong);
+                pct > thresholds.changeFailureMaxPercent(), wrong);
     }
 
     /**
@@ -175,12 +183,17 @@ public final class DoraCalculator {
      * censoring is visible next to the number rather than hidden behind it.
      */
     private Metric timeToRestore(List<IncidentEvent> incidents) {
+        // Implausible ordering is excluded here rather than rejected at
+        // construction. IncidentEvent used to throw, which over HTTP would 4xx
+        // and lose the incident -- and time to restore would improve because
+        // the inconvenient record vanished.
         String name = "time_to_restore";
         String unit = "hours";
-        String wrong = "> " + Thresholds.TIME_TO_RESTORE_MAX_HOURS + " " + unit + " (median)";
+        String wrong = "> " + thresholds.timeToRestoreMaxHours() + " " + unit + " (median)";
 
         List<Double> hours = incidents.stream()
                 .filter(IncidentEvent::isResolved)
+                .filter(IncidentEvent::isPlausible)
                 .map(i -> Duration.between(i.detectedAt(), i.resolvedAt()).toSeconds() / 3600.0)
                 .toList();
 
@@ -189,7 +202,7 @@ public final class DoraCalculator {
         }
         double median = round(median(hours));
         return Metric.observed(name, median, unit, hours.size(),
-                median > Thresholds.TIME_TO_RESTORE_MAX_HOURS, wrong);
+                median > thresholds.timeToRestoreMaxHours(), wrong);
     }
 
     /**
@@ -206,7 +219,7 @@ public final class DoraCalculator {
     private Metric suspectChanges(List<DeploymentEvent> prodDeploys) {
         String name = "data_quality.suspect_changes";
         String unit = "changes";
-        String wrong = "> " + Thresholds.SUSPECT_CHANGES_MAX + " " + unit;
+        String wrong = "> " + thresholds.suspectMax() + " " + unit;
 
         int total = prodDeploys.stream().mapToInt(d -> d.changes().size()).sum();
         if (total == 0) {
@@ -217,7 +230,27 @@ public final class DoraCalculator {
                         .filter(c -> c.authoredAt().isAfter(d.deployedAt())))
                 .count();
         return Metric.observed(name, (double) suspect, unit, total,
-                suspect > Thresholds.SUSPECT_CHANGES_MAX, wrong);
+                suspect > thresholds.suspectMax(), wrong);
+    }
+
+    /**
+     * Incidents whose resolution precedes their detection.
+     *
+     * <p>Excluded from time to restore, and counted here so the exclusion is
+     * observable. A silent exclusion and a measurement that never happened are
+     * the same failure.
+     */
+    private Metric suspectIncidents(List<IncidentEvent> incidents) {
+        String name = "data_quality.suspect_incidents";
+        String unit = "incidents";
+        String wrong = "> " + thresholds.suspectMax() + " " + unit;
+
+        if (incidents.isEmpty()) {
+            return Metric.unobserved(name, unit, wrong);
+        }
+        long suspect = incidents.stream().filter(i -> !i.isPlausible()).count();
+        return Metric.observed(name, (double) suspect, unit, incidents.size(),
+                suspect > thresholds.suspectMax(), wrong);
     }
 
     /** Half-open: {@code [start, end)}. Closed would double-count at window boundaries. */

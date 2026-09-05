@@ -73,10 +73,26 @@ Requires JDK 21. Gradle comes from the wrapper — nothing to install.
 core/   Domain model and the four metrics. No Spring, no I/O — pure and directly testable.
 ```
 
+`corePurityCheck` in the root build asserts that, by failing if `:core` ever
+acquires a runtime dependency. Until it existed the claim was prose and nothing
+checked it — and it is load-bearing rather than tidy: the
+dependency-vulnerability gate's denominator is a component count, so "core has
+none" is precisely why the `api` module has to supply a real graph instead of
+the scanner quietly scanning nothing.
+
 A module is added to `settings.gradle.kts` only once it contains sources. An
 included module with no source set reports `NO-SOURCE` and still rolls up into
 `BUILD SUCCESSFUL` — the same defect class this project is about — so
 `emptyModuleCheck` in the root build fails if that rule is broken.
+
+## Decisions
+
+Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
+
+1. [Change failure rate joins incidents, it does not count failed rollouts](docs/adr/0001-change-failure-rate-joins-incidents.md)
+2. [Lead time is measured per change, not per deployment](docs/adr/0002-lead-time-is-per-change.md)
+3. [Implausible input is quarantined and surfaced, not rejected](docs/adr/0003-suspect-input-is-a-signal.md)
+4. [Thresholds are a per-service value, not compiled-in constants](docs/adr/0004-thresholds-are-configurable.md)
 
 ## Roadmap
 
