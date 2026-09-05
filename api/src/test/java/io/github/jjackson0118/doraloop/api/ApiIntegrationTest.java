@@ -12,13 +12,21 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAttributeSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
+import java.lang.reflect.Modifier;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -51,6 +59,7 @@ class ApiIntegrationTest {
 
     @Autowired TestRestTemplate http;
     @Autowired JdbcClient db;
+    @Autowired TransactionAttributeSource transactionAttributes;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -120,6 +129,118 @@ class ApiIntegrationTest {
         assertThat(metric(report, "time_to_restore").get("observedN").asInt()).isEqualTo(1);
         assertThat(metric(report, "time_to_restore").get("value").asDouble()).isBetween(0.4, 0.6);
         assertThat(metric(report, "change_failure_rate").get("observedN").asInt()).isEqualTo(1);
+    }
+
+    // --- the write boundary ------------------------------------------------
+
+    /**
+     * A write that fails partway through leaves nothing behind.
+     *
+     * <p>{@code insertDeployment} issues 1 + N statements. Autocommitted
+     * individually, a failure after the parent insert would leave a deployment
+     * row with some or none of its changes -- permanently. That deployment
+     * counts toward deployment frequency and contributes no lead-time
+     * observation, which is exactly what a legal redeploy looks like. The
+     * corruption would render as fewer observations, never as an error, which
+     * is why it is worth a fault-injection test rather than a code reading.
+     *
+     * <p>The failure is injected with a trigger rather than a mock, because the
+     * thing under test is the boundary between this JVM and Postgres; a mocked
+     * repository would prove only that the mock was called.
+     */
+    @Test
+    void aFailedWriteLeavesNoPartialDeployment() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+
+        db.sql("""
+                CREATE OR REPLACE FUNCTION fail_on_marked_change() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.commit_sha = 'INJECTED-FAILURE' THEN
+                        RAISE EXCEPTION 'injected mid-write failure';
+                    END IF;
+                    RETURN NEW;
+                END; $$ LANGUAGE plpgsql
+                """).update();
+        db.sql("""
+                CREATE TRIGGER fail_on_marked_change_trigger
+                BEFORE INSERT ON deployment_change
+                FOR EACH ROW EXECUTE FUNCTION fail_on_marked_change()
+                """).update();
+        try {
+            ResponseEntity<String> res = postDeployment(eventId, service, "production",
+                    deployedAt, "SUCCESS", """
+                        {"commitSha":"written-first","authoredAt":"%s"},
+                        {"commitSha":"INJECTED-FAILURE","authoredAt":"%s"}
+                    """.formatted(deployedAt.minus(3, ChronoUnit.HOURS),
+                                  deployedAt.minus(2, ChronoUnit.HOURS)));
+
+            assertThat(res.getStatusCode().is5xxServerError())
+                    .as("an injected database failure is a server error")
+                    .isTrue();
+
+            assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
+                    .param(eventId).query(Integer.class).single())
+                    .as("the parent row must not survive a failed write")
+                    .isZero();
+            assertThat(db.sql("SELECT count(*) FROM deployment_change WHERE deployment_id = ?")
+                    .param(eventId).query(Integer.class).single())
+                    .as("no change row may survive either")
+                    .isZero();
+
+            assertThat(metric(report(service), "deployment_frequency").get("state").asText())
+                    .as("and the metric never saw it")
+                    .isEqualTo("UNOBSERVED");
+        } finally {
+            db.sql("DROP TRIGGER IF EXISTS fail_on_marked_change_trigger ON deployment_change").update();
+            db.sql("DROP FUNCTION IF EXISTS fail_on_marked_change()").update();
+        }
+    }
+
+    /**
+     * Every {@code @Transactional} method in this package resolves a real
+     * transaction attribute, asked of the container's own bean.
+     *
+     * <p>This pins a framework default the code depends on and is easy to get
+     * wrong in both directions. Spring's long-standing guidance is that
+     * proxy-based transactions apply to public methods only, and a
+     * hand-constructed {@code AnnotationTransactionAttributeSource} does default
+     * to {@code publicMethodsOnly = true} -- but the bean Spring Boot actually
+     * configures for CGLIB proxies is constructed with {@code false}, and the
+     * package-private ingest methods are advised correctly. A review that reads
+     * the annotation source in isolation concludes the opposite and is wrong.
+     *
+     * <p>So the assertion is made against {@code ctx.getBean(...)}, never
+     * against a new instance: the question is what this application resolves,
+     * not what a default constructor would. If a future Spring version or a
+     * configuration change flips that default, this fails loudly instead of the
+     * boundary quietly disappearing.
+     */
+    @Test
+    void everyTransactionalMethodResolvesARealAttribute() throws Exception {
+        List<String> examined = new ArrayList<>();
+        List<String> inert = new ArrayList<>();
+
+        ClassPathScanningCandidateComponentProvider scanner =
+                new ClassPathScanningCandidateComponentProvider(false);
+        scanner.addIncludeFilter((reader, factory) -> true);
+        for (BeanDefinition bd : scanner.findCandidateComponents(
+                "io.github.jjackson0118.doraloop.api")) {
+            Class<?> type = Class.forName(bd.getBeanClassName());
+            for (Method m : type.getDeclaredMethods()) {
+                if (!m.isAnnotationPresent(Transactional.class)) continue;
+                examined.add(type.getSimpleName() + "." + m.getName());
+                if (transactionAttributes.getTransactionAttribute(m, type) == null) {
+                    inert.add(type.getSimpleName() + "." + m.getName()
+                            + " (" + Modifier.toString(m.getModifiers()) + ")");
+                }
+            }
+        }
+
+        // An empty scan is not a pass -- the vacuity rule, inside a test.
+        assertThat(examined).as("@Transactional methods examined").isNotEmpty();
+        assertThat(inert).as("@Transactional methods Spring would not advise").isEmpty();
     }
 
     // --- the central claim, through the wire -------------------------------
