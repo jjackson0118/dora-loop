@@ -5,4 +5,8 @@ build/
 .idea/
 *.iml
 .DS_Store
-backups/*.tar.gz
+# The whole local restore point. Three scratch files reached main through it,
+# including a copy of ApiIntegrationTest.java that was already stale by the
+# time it landed -- a second copy of a test file drifts from the real one and
+# misleads whoever reads it next.
+backups/
