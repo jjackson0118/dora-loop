@@ -10,3 +10,10 @@ build/
 # time it landed -- a second copy of a test file drifts from the real one and
 # misleads whoever reads it next.
 backups/
+
+# Gate reports are the output of a run, not repository content. Five of these
+# were committed, recording denominators measured on a polluted working tree,
+# and ci/check-floors.sh reads them with no freshness check -- so it could be
+# run against checked-in artifacts and report five gates checked with no run
+# having happened. delivery-gates gitignores this directory for the same reason.
+.gate-reports/
