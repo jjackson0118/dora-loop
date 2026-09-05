@@ -346,10 +346,17 @@ class ApiIntegrationTest {
                     {"commitSha":"eeee","authoredAt":"%s"}
                 """.formatted(deployedAt.minus(1, ChronoUnit.HOURS));
 
-        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
-                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
-                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        ResponseEntity<String> first =
+                postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(parse(first.getBody()).get("disposition").asText()).isEqualTo("STORED");
+
+        // 200, not 201. A retry created nothing, and a client counting 201s to
+        // know how many deployments it recorded would be counting retries.
+        ResponseEntity<String> retry =
+                postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+        assertThat(retry.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(retry.getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
 
         assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
                 .param(eventId).query(Integer.class).single()).isEqualTo(1);
@@ -444,6 +451,146 @@ class ApiIntegrationTest {
         assertThat(liveness.isMember("db"))
                 .as("a database outage must not restart the process")
                 .isFalse();
+    }
+
+    // --- corrections that arrive later --------------------------------------
+
+    /**
+     * A deployment that succeeds and is later rolled back is one deployment
+     * with a corrected outcome.
+     *
+     * <p>This was a 409, and the rollback was dropped. {@code ROLLED_BACK} is
+     * one of only two numerator terms in change failure rate, so refusing the
+     * correction understates CFR -- the service looked better the more often it
+     * had to be rolled back. The bias is always toward flattering the metric,
+     * which is the direction that gets believed.
+     */
+    @Test
+    void aRollbackReportedLaterCorrectsTheDeploymentItUndoes() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(3, ChronoUnit.HOURS);
+        String changes = """
+                    {"commitSha":"abc123","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(2, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<String> corrected =
+                postDeployment(eventId, service, "production", deployedAt, "ROLLED_BACK", changes);
+        assertThat(corrected.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(corrected.getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+
+        assertThat(db.sql("SELECT outcome FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("ROLLED_BACK");
+        assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE id = ?")
+                .param(eventId).query(Integer.class).single())
+                .as("a correction is not a second deployment")
+                .isEqualTo(1);
+
+        // And it reaches the metric it exists to feed.
+        JsonNode report = report(service);
+        assertThat(metric(report, "deployment_frequency").get("observedN").asInt()).isEqualTo(1);
+        assertThat(metric(report, "change_failure_rate").get("value").asDouble()).isEqualTo(100.0);
+    }
+
+    @Test
+    void anOutcomeTransitionThatIsNotACorrectionIs409() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(2, ChronoUnit.HOURS);
+        String changes = """
+                    {"commitSha":"def456","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(1, ChronoUnit.HOURS));
+
+        postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes);
+
+        // FAILED_ROLLOUT means the change never reached production. It cannot
+        // follow a success: a retry that then failed is a different deployment.
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "FAILED_ROLLOUT", changes)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT outcome FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("SUCCESS");
+    }
+
+    @Test
+    void resolvingAnIncidentLaterIsAnUpdateNotACreate() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        assertThat(postIncident(incidentId, service, "abc", detected, null)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(metric(report(service), "time_to_restore").get("state").asText())
+                .as("an open incident contributes no restore observation")
+                .isEqualTo("UNOBSERVED");
+
+        ResponseEntity<String> resolved = postIncident(
+                incidentId, service, "abc", detected, detected.plus(45, ChronoUnit.MINUTES));
+        assertThat(resolved.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(resolved.getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+
+        assertThat(metric(report(service), "time_to_restore").get("value").asDouble())
+                .isBetween(0.7, 0.8);
+    }
+
+    /**
+     * A retry of the original open-incident payload cannot un-resolve it.
+     *
+     * <p>The write was an unconditional upsert of every column, so re-POSTing
+     * the event as first sent -- an ordinary thing for a pipeline to do on
+     * retry -- set {@code resolved_at} back to NULL. That silently deleted a
+     * time-to-restore observation and answered 201 with no warning: the metric
+     * went down because the measurement disappeared, not because anything
+     * improved.
+     */
+    @Test
+    void aRetryOfTheOpenPayloadCannotUnResolveAnIncident() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+        Instant resolvedAt = detected.plus(30, ChronoUnit.MINUTES);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        assertThat(postIncident(incidentId, service, "abc", detected, resolvedAt)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        assertThat(postIncident(incidentId, service, "abc", detected, null)
+                .getStatusCode())
+                .as("a payload omitting resolvedAt must not clear it")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT resolved_at IS NOT NULL FROM incident_event WHERE id = ?")
+                .param(incidentId).query(Boolean.class).single()).isTrue();
+        assertThat(metric(report(service), "time_to_restore").get("observedN").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void anIncidentResolutionCannotBeMovedOnceSet() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        postIncident(incidentId, service, "abc", detected, detected.plus(30, ChronoUnit.MINUTES));
+
+        assertThat(postIncident(incidentId, service, "abc", detected, detected.plus(5, ChronoUnit.MINUTES))
+                .getStatusCode())
+                .as("a published restore time cannot be rewritten")
+                .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
+    void changingAnIncidentsDetectionTimeIs409NotASilentOverwrite() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        assertThat(postIncident(incidentId, service, "abc", detected.minus(1, ChronoUnit.HOURS), null)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
     }
 
     // --- strictness survives the framework ---------------------------------
