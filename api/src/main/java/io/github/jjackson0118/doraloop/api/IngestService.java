@@ -44,7 +44,7 @@ class IngestService {
         DeploymentEvent event = new DeploymentEvent(
                 dto.id(), dto.service(), dto.environment(), changes, dto.deployedAt(), outcome);
 
-        String hash = hash(dto.toString());
+        String hash = hash(canonical(dto));
         Optional<String> existing = repo.existingDeploymentHash(dto.id());
         if (existing.isPresent()) {
             // Same id, same payload: a retry. Same id, different payload: two
@@ -65,7 +65,7 @@ class IngestService {
         IncidentEvent event = new IncidentEvent(
                 dto.id(), dto.service(), dto.causedByCommitSha(),
                 dto.detectedAt(), dto.resolvedAt());
-        repo.upsertIncident(event, hash(dto.toString()));
+        repo.upsertIncident(event, hash(canonical(dto)));
 
         List<IngestDtos.Warning> warnings = new ArrayList<>();
         if (!event.isPlausible()) {
@@ -98,6 +98,64 @@ class IngestService {
             }
         }
         return out;
+    }
+
+    /**
+     * A canonical encoding of the payload, deliberately not {@code toString()}.
+     *
+     * <p>A record's {@code toString()} separates fields with {@code ", name="},
+     * and nothing stops that sequence appearing inside a field value. Two
+     * genuinely different deployments therefore render identically:
+     *
+     * <pre>
+     *   A: service = "payments, environment=production", environment = "staging"
+     *   B: service = "payments", environment = "production, environment=staging"
+     * </pre>
+     *
+     * <p>Both produce the same string and the same digest. Whichever arrived
+     * second was treated as a retry of the first, discarded, and answered
+     * {@code 201 Created} with {@code stored: true} -- a deployment to
+     * production silently dropped while its producer was told it was recorded.
+     * Verified against the running service before this was changed.
+     *
+     * <p>Every field is written as {@code |length|value}, so a value cannot
+     * forge a delimiter: the encoding is injective regardless of content. The
+     * digest is over bytes, never over a human-readable rendering, and the
+     * version tag means a future change to this encoding invalidates old hashes
+     * loudly rather than silently comparing across two schemes.
+     */
+    private static String canonical(IngestDtos.DeploymentDto d) {
+        StringBuilder sb = new StringBuilder("deployment/v1");
+        field(sb, d.id());
+        field(sb, d.service());
+        field(sb, d.environment());
+        field(sb, d.deployedAt().toString());
+        field(sb, d.outcome());
+        sb.append("|n=").append(d.changes().size());
+        for (IngestDtos.ChangeDto c : d.changes()) {
+            field(sb, c.commitSha());
+            field(sb, c.authoredAt().toString());
+        }
+        return sb.toString();
+    }
+
+    private static String canonical(IngestDtos.IncidentDto d) {
+        StringBuilder sb = new StringBuilder("incident/v1");
+        field(sb, d.id());
+        field(sb, d.service());
+        field(sb, d.causedByCommitSha());
+        field(sb, d.detectedAt().toString());
+        field(sb, d.resolvedAt() == null ? null : d.resolvedAt().toString());
+        return sb.toString();
+    }
+
+    /** {@code |length|value}; null is {@code |null|}, which no length can spell. */
+    private static void field(StringBuilder sb, String v) {
+        if (v == null) {
+            sb.append("|null|");
+            return;
+        }
+        sb.append('|').append(v.length()).append('|').append(v);
     }
 
     private static String hash(String canonical) {

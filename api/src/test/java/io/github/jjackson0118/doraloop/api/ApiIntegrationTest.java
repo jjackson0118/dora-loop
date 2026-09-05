@@ -60,6 +60,7 @@ class ApiIntegrationTest {
     @Autowired TestRestTemplate http;
     @Autowired JdbcClient db;
     @Autowired TransactionAttributeSource transactionAttributes;
+    @Autowired org.springframework.boot.actuate.health.HealthEndpointGroups healthGroups;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -374,6 +375,75 @@ class ApiIntegrationTest {
 
         assertThat(db.sql("SELECT environment FROM deployment_event WHERE id = ?")
                 .param(eventId).query(String.class).single()).isEqualTo("production");
+    }
+
+    /**
+     * Two different deployments cannot be made to collide by putting the
+     * separator inside a field value.
+     *
+     * <p>The idempotency digest used to be taken over {@code dto.toString()}. A
+     * record renders as {@code Name[a=1, b=2]}, so {@code ", environment="}
+     * inside a value forges a field boundary and the two payloads below produce
+     * an identical string. Before the canonical encoding, B was treated as a
+     * retry of A: discarded, and answered 201 with {@code stored: true} -- a
+     * production deployment lost while its producer was told it was recorded.
+     * A silent write loss reported as success is the failure this project
+     * exists to argue about, so it gets a test rather than a comment.
+     */
+    @Test
+    void aSeparatorInsideAValueCannotForgeAPayloadMatch() {
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        String change = """
+                    {"commitSha":"aaa","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(2, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, "payments, environment=production", "staging",
+                deployedAt, "SUCCESS", change).getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
+
+        assertThat(postDeployment(eventId, "payments", "production, environment=staging",
+                deployedAt, "SUCCESS", change).getStatusCode())
+                .as("a different deployment reusing the id is a conflict, not a retry")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT environment FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("staging");
+    }
+
+    // --- the readiness probe -----------------------------------------------
+
+    /**
+     * The readiness group actually contains the database.
+     *
+     * <p>{@code management.health.db.enabled} adds the indicator to the
+     * aggregate endpoint only. Enabling probes installs
+     * {@code AvailabilityProbesHealthEndpointGroups}, whose readiness group is
+     * {@code readinessState} and nothing else -- so a readiness probe returned
+     * UP while Postgres was unreachable, and every request would have failed.
+     * The group membership is asserted rather than the response body, because
+     * {@code show-details: never} means a healthy body is identical either way:
+     * the response cannot distinguish "the database was checked and is up" from
+     * "the database was never checked."
+     */
+    @Test
+    void readinessIncludesTheDatabaseAndLivenessDoesNot() {
+        var readiness = healthGroups.get("readiness");
+        assertThat(readiness).isNotNull();
+        assertThat(readiness.isMember("db"))
+                .as("readiness must fail when the database is unreachable")
+                .isTrue();
+        assertThat(readiness.isMember("readinessState")).isTrue();
+
+        // Liveness must NOT include it: a database outage should stop traffic
+        // being routed here, not have the process killed and restarted, which
+        // cannot fix an outage in a different process and turns a degradation
+        // into a crash loop.
+        var liveness = healthGroups.get("liveness");
+        assertThat(liveness).isNotNull();
+        assertThat(liveness.isMember("db"))
+                .as("a database outage must not restart the process")
+                .isFalse();
     }
 
     // --- strictness survives the framework ---------------------------------
