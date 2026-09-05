@@ -4,9 +4,10 @@ A library that computes the four DORA metrics — deployment frequency, lead tim
 for changes, change failure rate, and time to restore — from deployment and
 incident events.
 
-**Status: `core` only.** The domain model and the metrics are built and tested.
-There is no service, no ingest, no persistence, and no deploy step: CI runs gates
-and publishes reports, and `DoraCalculator` has no caller outside the test suite.
+**Status: `core` and `api` are built; nothing is deployed yet.** The domain
+model, the metrics, and an HTTP service that ingests events and serves reports
+all exist and are tested. There is still no deploy step — CI runs gates and
+publishes reports, and nothing runs the service anywhere.
 The intended end state is that the pipeline deploying this service also posts its
 own deployment events back into it — the pipeline as both subject and source of
 its own measurements. That loop is **not built**. See the Roadmap.
@@ -71,7 +72,25 @@ Requires JDK 21. Gradle comes from the wrapper — nothing to install.
 
 ```
 core/   Domain model and the four metrics. No Spring, no I/O — pure and directly testable.
+api/    Spring Boot service: event ingest, report endpoint, actuator health. Postgres behind Flyway.
 ```
+
+`api` never lets a framework reach `core`. Requests and responses are its own
+DTOs, hand-mapped: serializing the core records directly would make their
+component names a wire contract that any refactor silently breaks, and it is
+the first step toward Jackson and validation annotations on domain types.
+
+Two serialization rules exist because getting them wrong reintroduces this
+project's central failure through a default. An unobserved metric serializes
+`"value": null`, **explicitly present** — an omitted key deserializes to `0` in
+most typed clients. And there is no boolean health field, because a boolean
+cannot carry three states and whichever value it took for `UNOBSERVED` would
+conflate it with either healthy or degraded. Both are asserted by tests.
+
+Ingest is strict on unknown fields. A producer still sending the pre-ADR-0002
+`commitAuthoredAt` would otherwise be accepted with an empty `changes` list — a
+deployment contributing no lead-time observations, which renders as *fewer
+observations* rather than as an error.
 
 `corePurityCheck` in the root build asserts that, by failing if `:core` ever
 acquires a runtime dependency. Until it existed the claim was prose and nothing
@@ -96,7 +115,6 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 
 ## Roadmap
 
-- `api` — Spring Boot service: event ingest, metrics endpoint, actuator health
 - A deploy step in the pipeline that posts its own `DeploymentEvent` back here,
   which is what closes the loop the name refers to
 
