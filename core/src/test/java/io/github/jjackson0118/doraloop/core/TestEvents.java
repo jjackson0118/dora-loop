@@ -57,6 +57,25 @@ final class TestEvents {
         return new IncidentEvent(id, "dora-loop", commitSha, detectedAt, detectedAt.plusSeconds(3600));
     }
 
+    /**
+     * A production deploy belonging to a different service.
+     *
+     * <p>Every other fixture here hardcodes "dora-loop", so the calculator's own
+     * service filter had never been shown a foreign row -- it was covered for by
+     * the SQL filter in the api module, and each half of that pair could be
+     * deleted with the whole suite green.
+     */
+    static DeploymentEvent otherServiceDeploy(String id, Instant deployedAt) {
+        return new DeploymentEvent(id, "some-other-service", "production",
+                List.of(new Change("sha-" + id, deployedAt.minusSeconds(3600))),
+                deployedAt, Outcome.SUCCESS);
+    }
+
+    static IncidentEvent otherServiceIncident(String id, Instant detectedAt) {
+        return new IncidentEvent(id, "some-other-service", null, detectedAt,
+                detectedAt.plusSeconds(1800));
+    }
+
     private TestEvents() {
     }
 }

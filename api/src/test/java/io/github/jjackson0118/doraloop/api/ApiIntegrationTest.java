@@ -61,6 +61,7 @@ class ApiIntegrationTest {
     @Autowired JdbcClient db;
     @Autowired TransactionAttributeSource transactionAttributes;
     @Autowired org.springframework.boot.actuate.health.HealthEndpointGroups healthGroups;
+    @Autowired EventRepository repo;
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -792,6 +793,38 @@ class ApiIntegrationTest {
 
         assertThat(db.sql("SELECT caused_by_commit_sha FROM incident_event WHERE id = ?")
                 .param(incidentId).query(String.class).single()).isEqualTo("abc");
+    }
+
+    /**
+     * The repository's own filter, asked directly.
+     *
+     * <p>Separate from the end-to-end test below on purpose. The service filter
+     * exists in the SQL and again in {@code DoraCalculator}, and an end-to-end
+     * test cannot tell which one did the work: deleting either half leaves the
+     * other screening the rows out, so both mutations survived a suite that
+     * contained the end-to-end test. A redundantly implemented rule needs one
+     * test per layer, or it has none.
+     */
+    @Test
+    void theRepositoryReturnsOnlyTheRequestedServicesRows() {
+        String mine = svc();
+        String theirs = svc();
+        Instant at = Instant.now().minus(1, ChronoUnit.HOURS);
+
+        postDeployment(id(), theirs, "production", at, "SUCCESS", """
+                    {"commitSha":"other","authoredAt":"%s"}
+                """.formatted(at.minus(1, ChronoUnit.HOURS)));
+        postIncident(id(), theirs, "other", at, at.plus(10, ChronoUnit.MINUTES));
+
+        assertThat(repo.deploymentsFor(mine))
+                .as("SQL must not return another service's deployments").isEmpty();
+        assertThat(repo.incidentsFor(mine))
+                .as("SQL must not return another service's incidents").isEmpty();
+
+        // And the rows really are there to be wrongly returned, so an empty
+        // result cannot pass by the table being empty.
+        assertThat(repo.deploymentsFor(theirs)).hasSize(1);
+        assertThat(repo.incidentsFor(theirs)).hasSize(1);
     }
 
     /**
