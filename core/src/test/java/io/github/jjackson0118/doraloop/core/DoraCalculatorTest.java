@@ -31,6 +31,83 @@ class DoraCalculatorTest {
 
 
     @Nested
+    @DisplayName("denominators")
+    class Denominators {
+
+        /**
+         * {@code data_quality.suspect_changes} counts the changes it examined,
+         * not the deployments it saw.
+         *
+         * <p>Every fixture that asserted on this used deployments carrying
+         * exactly one change, which makes the two quantities the same number --
+         * so the denominator could be swapped for the deployment count with the
+         * suite green. {@code observedN} is what the report offers a reader as
+         * the basis for trusting the value, and this project's whole argument is
+         * that the denominator has to be a byproduct of the work rather than a
+         * number calculated alongside it.
+         */
+        @Test
+        void suspectChangesCountsChangesExaminedNotDeploymentsSeen() {
+            Metric m = calc.calculate("dora-loop",
+                    List.of(prodDeployWith("multi", NOW.minus(Duration.ofDays(1)),
+                            Outcome.SUCCESS, 2.0, 6.0, 10.0)),
+                    List.of()).suspectChanges();
+
+            assertThat(m.observedN())
+                    .as("three changes were examined, carried by one deployment")
+                    .isEqualTo(3);
+        }
+    }
+
+    @Nested
+    @DisplayName("boundaries and rounding")
+    class BoundariesAndRounding {
+
+        /**
+         * A value sitting exactly on a threshold is not degraded; a hair above
+         * it is.
+         *
+         * <p>No fixture anywhere sat on a boundary, so {@code >} could be
+         * changed to {@code >=} on every threshold but one with the suite
+         * green. The one exception was suspectMax, which is 0.0 and therefore
+         * always on its own boundary -- it was covered by accident rather than
+         * by design.
+         */
+        @Test
+        void aMedianExactlyOnTheThresholdIsNotDegraded() {
+            // defaults(): leadTimeMaxHours = 24.0
+            Metric at = calc.calculate("dora-loop",
+                    List.of(prodDeploy("a", NOW.minus(Duration.ofDays(1)), 24.0, Outcome.SUCCESS)),
+                    List.of()).leadTimeForChanges();
+            assertThat(at.value()).isEqualTo(24.0);
+            assertThat(at.state()).as("exactly at the threshold is not yet wrong").isEqualTo(SignalState.OK);
+
+            Metric over = calc.calculate("dora-loop",
+                    List.of(prodDeploy("b", NOW.minus(Duration.ofDays(1)), 24.01, Outcome.SUCCESS)),
+                    List.of()).leadTimeForChanges();
+            assertThat(over.state()).isEqualTo(SignalState.DEGRADED);
+        }
+
+        /**
+         * The served value is rounded, and the verdict follows the number that
+         * is served.
+         *
+         * <p>Every fixture used values that are exactly representable, so
+         * deleting the rounding entirely changed nothing anyone asserted. A
+         * report that says 0.3333333333333333 while its state was decided on
+         * some other number is two claims that cannot both be checked.
+         */
+        @Test
+        void theValueServedIsTheValueRounded() {
+            // 20 minutes = 0.3333... hours
+            Metric m = calc.calculate("dora-loop",
+                    List.of(prodDeploy("a", NOW.minus(Duration.ofDays(1)), 1.0 / 3.0, Outcome.SUCCESS)),
+                    List.of()).leadTimeForChanges();
+            assertThat(m.value()).isEqualTo(0.33);
+        }
+    }
+
+    @Nested
     @DisplayName("service scoping")
     class ServiceScoping {
 

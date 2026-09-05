@@ -51,9 +51,19 @@ pipeline has to track the previously deployed SHA and pass the whole range. See
 
 Every guard has a negative control — a test asserting it *rejects* the bad case,
 not merely that the good case passes. A constraint never observed refusing
-anything is not known to work. That covers all four `Metric` invariants and the
-four remaining domain guards: incident ordering, non-positive windows,
-`Metric.observed` with no observations, and the median of an empty list.
+anything is not known to work. That covers all four `Metric` invariants,
+including the negative observation count, which was the one without a control
+until a mutation pass found it; plus non-positive windows and `Metric.observed`
+with no observations.
+
+Two exceptions, named rather than quietly included. **Incident ordering is not a
+rejection at all** — per [ADR 0003](docs/adr/0003-suspect-input-is-a-signal.md)
+an implausible incident is accepted and marked, so its test asserts acceptance;
+listing it here as a guard with a negative control was wrong. And **the median
+of an empty list has no control**, because every caller checks `isEmpty()` first
+and renders `UNOBSERVED`, so the throw is unreachable. It stays for a future
+caller that forgets, and the source says so — but an unreachable guard is not a
+tested one, and claiming otherwise is the failure this file is about.
 
 The guards are additionally verified by perturbation: remove the
 zero-observations check and `MetricTest` goes red; count open incidents as
@@ -67,8 +77,10 @@ since asserting the tables would also pass under `ddl-auto` — which would mean
 the checked-in SQL was decorative.
 
 Those tests are perturbed too. The mutation that matters most is emptying
-`insertDeployment`: it left the previous suite entirely green, and now fails
-seven tests. A write boundary is verified by injecting a Postgres trigger that
+`insertDeployment`: it left the pre-integration-test suite entirely green, and
+now fails 19 tests (measured, not remembered — it was written here as "seven"
+from the 14-test era and carried forward through three commits that grew the
+suite). A write boundary is verified by injecting a Postgres trigger that
 raises mid-write and asserting nothing survives, rather than by reading the
 annotation — a review that read the annotation source in isolation concluded the
 boundary was inert, and measurement showed it was not.

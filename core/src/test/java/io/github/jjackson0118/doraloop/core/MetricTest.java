@@ -70,4 +70,21 @@ class MetricTest {
         assertThat(m.state()).isEqualTo(SignalState.DEGRADED);
         assertThat(m.alerting()).isTrue();
     }
+
+    /**
+     * The fourth invariant, which was the only one without a negative control.
+     *
+     * <p>A negative observation count would sail past the zero-observations
+     * check -- the guard that carries this project's central claim -- because
+     * that one asks {@code == 0}. A constraint never observed refusing anything
+     * is not known to work, which is this repository's own argument about
+     * gates, applied to itself.
+     */
+    @Test
+    void aNegativeObservationCountIsRefused() {
+        assertThatThrownBy(() -> new Metric(
+                "lead_time_for_changes", 1.0, "hours", -1, SignalState.OK, "> 24 hours"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cannot be negative");
+    }
 }

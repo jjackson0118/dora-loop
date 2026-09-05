@@ -36,6 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The tests the module shipped without.
@@ -1166,6 +1167,40 @@ class ApiIntegrationTest {
                 .isEqualTo("UNOBSERVED");
         assertThat(metric(reportWindow(service, "P180D"), "deployment_frequency").get("observedN").asInt())
                 .isEqualTo(1);
+    }
+
+    /**
+     * The upper bound on the window is enforced, not merely written.
+     *
+     * <p>Deleting the whole bounds check left the suite green: the parse test
+     * below covers only unparseable input, and a negative window is caught
+     * further down by DoraCalculator's own guard, so the 365-day cap was the
+     * one clause nothing exercised. It is what stops a request loading a
+     * service's entire history into heap on an unauthenticated endpoint.
+     */
+    @Test
+    void aWindowBeyondTheCapIs400() {
+        assertThat(http.getForEntity("/api/v1/services/" + svc() + "/report?window=P400D", String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        // And the boundary itself is accepted.
+        assertThat(http.getForEntity("/api/v1/services/" + svc() + "/report?window=P365D", String.class)
+                .getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * The correction UPDATE must actually match a row.
+     *
+     * <p>Asked of the repository directly, because the service checks the same
+     * thing first and so the guard is unreachable from every route through the
+     * API -- the same shape as the resolve predicate. A guard nothing can reach
+     * is a guard nothing has tested.
+     */
+    @Test
+    void correctingAnAbsentDeploymentUpdatesNothingAndSaysSo() {
+        assertThatThrownBy(() -> repo.updateDeploymentOutcome(
+                "no-such-deployment", io.github.jjackson0118.doraloop.core.Outcome.ROLLED_BACK, "h"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("corrected 0");
     }
 
     @Test

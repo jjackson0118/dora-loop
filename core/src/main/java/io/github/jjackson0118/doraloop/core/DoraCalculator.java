@@ -258,6 +258,18 @@ public final class DoraCalculator {
         return !t.isBefore(start) && t.isBefore(end);
     }
 
+    /**
+     * The empty case is unreachable today, and the throw stays anyway.
+     *
+     * <p>Every caller checks {@code isEmpty()} first and renders UNOBSERVED, so
+     * mutating this to return {@code 0.0} breaks no test -- which is worth
+     * saying out loud rather than leaving as an apparently-tested guard. What
+     * it protects against is a future caller that forgets that check: the
+     * answer would be a zero standing in for a measurement that never happened,
+     * this project's central failure, arriving through the one function that
+     * cannot tell the difference. A loud failure is the right behaviour even
+     * where nothing can currently trigger it.
+     */
     private static double median(List<Double> values) {
         if (values.isEmpty()) {
             throw new IllegalArgumentException("median of an empty list is undefined");
