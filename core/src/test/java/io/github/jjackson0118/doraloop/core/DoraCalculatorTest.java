@@ -40,7 +40,7 @@ class DoraCalculatorTest {
                 assertThat(m.state()).isEqualTo(SignalState.UNOBSERVED);
                 assertThat(m.value()).isNull();
             });
-            assertThat(r.unobserved()).hasSize(5);
+            assertThat(r.unobserved()).hasSize(6);
             assertThat(r.alerting()).isEmpty();
         }
     }
@@ -277,8 +277,53 @@ class DoraCalculatorTest {
     }
 
     @Nested
+    @DisplayName("thresholds")
+    class ConfigurableThresholds {
+
+        @Test
+        @DisplayName("a stricter per-service threshold changes the verdict on the same data")
+        void thresholdsAreInjectable() {
+            List<DeploymentEvent> deploys = List.of(
+                    prodDeploy("a", NOW.minus(Duration.ofDays(1)), 6, Outcome.SUCCESS));
+
+            // 6h lead time: OK against the 24h default, degraded against a
+            // service that promises four. Impossible before Thresholds became
+            // an instance, because the values were compiled into the calculator.
+            Metric lenient = new DoraCalculator(Clock.fixed(NOW, ZoneOffset.UTC), WINDOW)
+                    .calculate("dora-loop", deploys, List.of()).leadTimeForChanges();
+            Metric strict = new DoraCalculator(Clock.fixed(NOW, ZoneOffset.UTC), WINDOW,
+                    new Thresholds(1.0, 4.0, 15.0, 24.0, 0.0))
+                    .calculate("dora-loop", deploys, List.of()).leadTimeForChanges();
+
+            assertThat(lenient.state()).isEqualTo(SignalState.OK);
+            assertThat(strict.state()).isEqualTo(SignalState.DEGRADED);
+            assertThat(strict.definitionOfWrong()).contains("4.0");
+        }
+    }
+
+    @Nested
     @DisplayName("data quality")
     class DataQuality {
+
+        @Test
+        @DisplayName("an incident resolved before it was detected is quarantined, not silently dropped")
+        void skewedIncidentIsSurfaced() {
+            List<IncidentEvent> incidents = List.of(
+                    resolved("good", NOW.minus(Duration.ofDays(1)), 4),
+                    new IncidentEvent("skewed", "dora-loop", null,
+                            NOW.minus(Duration.ofDays(2)),
+                            NOW.minus(Duration.ofDays(3))));
+
+            DoraReport r = calc.calculate("dora-loop", List.of(), incidents);
+
+            assertThat(r.suspectIncidents().value()).isEqualTo(1.0);
+            assertThat(r.suspectIncidents().observedN()).isEqualTo(2);
+            assertThat(r.suspectIncidents().alerting()).isTrue();
+
+            // excluded from the median, but the incident was not lost
+            assertThat(r.timeToRestore().value()).isEqualTo(4.0);
+            assertThat(r.timeToRestore().observedN()).isEqualTo(1);
+        }
 
         @Test
         @DisplayName("a change authored after its deploy is quarantined, not silently dropped")

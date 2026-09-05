@@ -14,7 +14,8 @@ public record DoraReport(
         Metric leadTimeForChanges,
         Metric changeFailureRate,
         Metric timeToRestore,
-        Metric suspectChanges
+        Metric suspectChanges,
+        Metric suspectIncidents
 ) {
     public DoraReport {
         Objects.requireNonNull(service, "service");
@@ -25,6 +26,7 @@ public record DoraReport(
         Objects.requireNonNull(changeFailureRate, "changeFailureRate");
         Objects.requireNonNull(timeToRestore, "timeToRestore");
         Objects.requireNonNull(suspectChanges, "suspectChanges");
+        Objects.requireNonNull(suspectIncidents, "suspectIncidents");
     }
 
     /** The four DORA metrics. */
@@ -42,6 +44,7 @@ public record DoraReport(
     public List<Metric> allSignals() {
         List<Metric> all = new java.util.ArrayList<>(metrics());
         all.add(suspectChanges);
+        all.add(suspectIncidents);
         return List.copyOf(all);
     }
 

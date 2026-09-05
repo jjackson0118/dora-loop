@@ -66,4 +66,32 @@ val emptyModuleCheck by tasks.registering {
     }
 }
 
-tasks.named("build") { dependsOn(emptyModuleCheck) }
+/**
+ * Asserts core has no runtime dependencies.
+ *
+ * The README says core is "No Spring, no I/O -- pure and directly testable",
+ * and until now nothing checked it. An unenforced claim reads as coverage
+ * without being it, which is the failure this project is about.
+ *
+ * It is also load-bearing for the dependency-vulnerability gate: that gate's
+ * denominator is the component count, and "core has none" is the reason the
+ * api module has to supply a real graph rather than the scanner quietly
+ * scanning nothing.
+ */
+val corePurityCheck by tasks.registering {
+    group = "verification"
+    description = "Fails if :core acquires a runtime dependency."
+    doLast {
+        val core = project(":core")
+        val deps = core.configurations.getByName("runtimeClasspath").resolvedConfiguration
+            .resolvedArtifacts.map { it.moduleVersion.id.toString() }.sorted()
+        if (deps.isNotEmpty()) {
+            throw GradleException(
+                ":core has runtime dependencies, and the README says it has none: " +
+                    deps.joinToString(", ")
+            )
+        }
+    }
+}
+
+tasks.named("build") { dependsOn(emptyModuleCheck, corePurityCheck) }

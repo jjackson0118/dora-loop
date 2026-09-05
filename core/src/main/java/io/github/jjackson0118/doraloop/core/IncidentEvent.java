@@ -13,6 +13,17 @@ import java.util.Objects;
  *
  * <p>It is nullable: an incident with no identified cause is still an incident.
  * It counts toward time to restore and contributes to no deployment's failure.
+ *
+ * <p>Nothing here rejects an incident for implausible timestamps. This
+ * previously threw when {@code resolvedAt} preceded {@code detectedAt}, which
+ * was the same guard ADR 0003 removed from {@link DeploymentEvent} and left
+ * standing here. The consequence is identical once ingest is an HTTP endpoint:
+ * the guard returns 4xx, the incident is lost, and time to restore
+ * <em>improves</em> because the inconvenient record disappeared. Validation
+ * written to protect a metric became the thing most likely to corrupt it.
+ *
+ * <p>Implausible ordering is quarantined during calculation and surfaced by
+ * {@code data_quality.suspect_incidents} instead.
  */
 public record IncidentEvent(
         String id,
@@ -25,9 +36,6 @@ public record IncidentEvent(
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(service, "service");
         Objects.requireNonNull(detectedAt, "detectedAt");
-        if (resolvedAt != null && resolvedAt.isBefore(detectedAt)) {
-            throw new IllegalArgumentException("resolvedAt precedes detectedAt for " + id);
-        }
     }
 
     public boolean isResolved() {
@@ -36,5 +44,14 @@ public record IncidentEvent(
 
     public boolean hasIdentifiedCause() {
         return causedByCommitSha != null;
+    }
+
+    /**
+     * Whether this incident's timestamps are ordered plausibly.
+     *
+     * <p>An unresolved incident is not implausible -- it is simply open.
+     */
+    public boolean isPlausible() {
+        return resolvedAt == null || !resolvedAt.isBefore(detectedAt);
     }
 }
