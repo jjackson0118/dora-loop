@@ -1,0 +1,42 @@
+spring:
+  application.name: dora-loop-api
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/doraloop}
+    username: ${SPRING_DATASOURCE_USERNAME:doraloop}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  jackson:
+    # Strict on ingest. A producer still sending a pre-ADR-0002 field would
+    # otherwise be accepted with zero changes -- a deployment contributing no
+    # lead-time observations, which renders as FEWER OBSERVATIONS rather than
+    # as an error. Silent field-dropping is the same defect class as a silent
+    # exclusion.
+    deserialization:
+      fail-on-unknown-properties: true
+    # NON_NULL is deliberately NOT set: an unobserved metric must serialize as
+    # "value": null and not be omitted, or typed clients read it as zero.
+    default-property-inclusion: always
+
+server:
+  shutdown: graceful
+  port: ${PORT:8080}
+
+# The deploy job posts its own DeploymentEvent at deploy time; a SIGKILL
+# mid-POST loses the measurement the project is named for.
+spring.lifecycle.timeout-per-shutdown-phase: 20s
+
+management:
+  endpoints.web.exposure.include: health,info
+  endpoint.health:
+    probes.enabled: true
+    show-details: never
+  # Readiness must include the database. A probe reporting UP while Postgres is
+  # unreachable is this project's own thesis, at the ops layer.
+  health.db.enabled: true
+  info.env.enabled: true
+
+info:
+  build:
+    sha: ${DORA_BUILD_SHA:unknown}
