@@ -1100,11 +1100,20 @@ class ApiIntegrationTest {
             }));
         }
 
+        // A fixed number of reads, not a fixed slice of wall-clock time.
+        //
+        // This asserted "more than 20 reads in 4 seconds" and passed everywhere
+        // I ran it. What that assertion actually measures is how fast the
+        // machine is, and a test whose verdict depends on the runner is a test
+        // that will eventually fail for a reason unrelated to the code. Counting
+        // reads instead makes the work deterministic; the deadline below only
+        // stops a genuinely stuck run from hanging the suite.
         int reads = 0;
         int inconsistent = 0;
+        final int targetReads = 40;
         try {
-            long until = System.currentTimeMillis() + 4_000;
-            while (System.currentTimeMillis() < until) {
+            long deadline = System.currentTimeMillis() + 60_000;
+            while (reads < targetReads && System.currentTimeMillis() < deadline) {
                 JsonNode report = report(service);
                 int deploys = metric(report, "deployment_frequency").get("observedN").asInt();
                 int leads = metric(report, "lead_time_for_changes").get("observedN").asInt();
@@ -1119,7 +1128,9 @@ class ApiIntegrationTest {
 
         // Every deployment here carries exactly one change, so a consistent read
         // must report the two counts equal.
-        assertThat(reads).as("the probe must actually have read something").isGreaterThan(20);
+        assertThat(reads)
+                .as("every read must have happened; a short count means the run was stuck, not that the code is fine")
+                .isEqualTo(targetReads);
         assertThat(inconsistent)
                 .as("%d of %d reads saw a deployment without its changes", inconsistent, reads)
                 .isZero();
