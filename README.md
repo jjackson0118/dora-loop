@@ -59,6 +59,20 @@ The guards are additionally verified by perturbation: remove the
 zero-observations check and `MetricTest` goes red; count open incidents as
 zero-duration restores and two `DoraCalculatorTest` cases go red. Revert, green.
 
+`api` is tested against a real Postgres through a real socket, because the parts
+of it that can be wrong are the parts an `ObjectMapper` never touches: the
+migration, the SQL, the transaction boundary and the status codes. The
+migration's own version row is asserted rather than the existence of the tables,
+since asserting the tables would also pass under `ddl-auto` — which would mean
+the checked-in SQL was decorative.
+
+Those tests are perturbed too. The mutation that matters most is emptying
+`insertDeployment`: it left the previous suite entirely green, and now fails
+seven tests. A write boundary is verified by injecting a Postgres trigger that
+raises mid-write and asserting nothing survives, rather than by reading the
+annotation — a review that read the annotation source in isolation concluded the
+boundary was inert, and measurement showed it was not.
+
 ## Build
 
 Requires JDK 21. Gradle comes from the wrapper — nothing to install.
@@ -91,6 +105,40 @@ Ingest is strict on unknown fields. A producer still sending the pre-ADR-0002
 `commitAuthoredAt` would otherwise be accepted with an empty `changes` list — a
 deployment contributing no lead-time observations, which renders as *fewer
 observations* rather than as an error.
+
+### Replays, retries and corrections
+
+Three different things arrive under an id that already exists, and collapsing
+them loses information in the direction that flatters the metrics:
+
+| | Response | Meaning |
+|---|---|---|
+| New event | `201` `STORED` | Written. |
+| Identical payload | `200` `DUPLICATE` | A retry. Nothing written. |
+| Legal correction | `200` `UPDATED` | `SUCCESS` → `ROLLED_BACK`, or an open incident being resolved. |
+| Anything else | `409` | Two different claims about one event. |
+
+`201` is reserved for a write that happened, because a client counting `201`s to
+know what it recorded would otherwise be counting its own retries.
+
+The two corrections exist because both arrive *after* the event they describe.
+A rollback is reported later than the deployment it undoes, and `ROLLED_BACK` is
+one of only two numerator terms in change failure rate — refusing the correction
+made the service look better the more often it had to be rolled back. An
+incident's `resolvedAt` arrives later than the incident, so resolution is a
+re-POST rather than a `PATCH` endpoint that sets one field.
+
+Corrections are narrow on purpose. `FAILED_ROLLOUT` means the change never
+reached production, so it cannot follow a success; `ROLLED_BACK` is terminal;
+and a resolution time that has been published cannot be moved or cleared. The
+`UPDATE` carries `AND resolved_at IS NULL` so that last one is enforced by the
+database rather than only by the check above it.
+
+The idempotency digest is over a length-prefixed encoding of the payload, not
+over `toString()`. A record renders as `Name[a=1, b=2]`, so `", environment="`
+inside a field value forges a field boundary: two genuinely different
+deployments produced the same digest, and the second was answered `201` and
+discarded.
 
 `corePurityCheck` in the root build asserts that, by failing if `:core` ever
 acquires a runtime dependency. Until it existed the claim was prose and nothing
