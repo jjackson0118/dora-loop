@@ -388,14 +388,15 @@ class ApiIntegrationTest {
      * Two different deployments cannot be made to collide by putting the
      * separator inside a field value.
      *
-     * <p>The idempotency digest used to be taken over {@code dto.toString()}. A
-     * record renders as {@code Name[a=1, b=2]}, so {@code ", environment="}
-     * inside a value forges a field boundary and the two payloads below produce
-     * an identical string. Before the canonical encoding, B was treated as a
-     * retry of A: discarded, and answered 201 with {@code stored: true} -- a
-     * production deployment lost while its producer was told it was recorded.
-     * A silent write loss reported as success is the failure this project
-     * exists to argue about, so it gets a test rather than a comment.
+     * <p>This is a regression test for one historical defect, and nothing more.
+     * The digest used to be taken over {@code dto.toString()}, so
+     * {@code ", environment="} inside a value forged a field boundary. It does
+     * <strong>not</strong> test that the current encoding is injective: no
+     * pipe-delimited scheme ever emits that sequence, so this passes under any
+     * encoding at all, including one with no length prefix. That was measured,
+     * not assumed. The invariant itself lives in
+     * {@link CanonicalEncodingTest}, and the wire-level case is
+     * {@link #aPipeInsideAValueCannotForgeAPayloadMatch()}.
      */
     @Test
     void aSeparatorInsideAValueCannotForgeAPayloadMatch() {
@@ -451,6 +452,90 @@ class ApiIntegrationTest {
         assertThat(liveness.isMember("db"))
                 .as("a database outage must not restart the process")
                 .isFalse();
+    }
+
+    /**
+     * The delimiter of the encoding actually in use, at the HTTP boundary.
+     *
+     * <p>Deleting the length prefix from {@code field()} makes these two
+     * payloads encode identically, and the second is then answered
+     * {@code 200 DUPLICATE} with nothing written -- a production deployment
+     * lost while the producer is told it was already recorded.
+     */
+    @Test
+    void aPipeInsideAValueCannotForgeAPayloadMatch() {
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        String change = """
+                    {"commitSha":"aaa","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(2, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, "pay|3|abc", "zz", deployedAt, "SUCCESS", change)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(postDeployment(eventId, "pay", "3|abc|zz", deployedAt, "SUCCESS", change)
+                .getStatusCode())
+                .as("a pipe in a value must not forge a field boundary")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT environment FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("zz");
+    }
+
+    /**
+     * The commit range is part of the payload.
+     *
+     * <p>Every other id-reuse test varies service, environment or outcome. The
+     * changes list was the one dimension never varied under a reused id, so
+     * dropping it from the canonical encoding entirely left the whole suite
+     * green -- two deployments carrying completely different commits hashing
+     * the same, and the second discarded as a retry.
+     */
+    @Test
+    void sameIdWithDifferentCommitsIs409AndDoesNotOverwrite() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        Instant authoredAt = deployedAt.minus(2, ChronoUnit.HOURS);
+
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS",
+                """
+                    {"commitSha":"aaa","authoredAt":"%s"}
+                """.formatted(authoredAt)).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS",
+                """
+                    {"commitSha":"bbb","authoredAt":"%s"}
+                """.formatted(authoredAt)).getStatusCode())
+                .as("a different commit range under one id is a conflict, not a retry")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT commit_sha FROM deployment_change WHERE deployment_id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("aaa");
+    }
+
+    /**
+     * Text that cannot be stored faithfully is refused rather than accepted and
+     * silently altered.
+     *
+     * <p>An unpaired surrogate is not representable in UTF-8: both the digest
+     * and PostgreSQL replace it, so two payloads differing only there would
+     * hash the same AND store the same. Answering {@code STORED} would report
+     * having recorded something other than what was sent.
+     */
+    @Test
+    void textThatCannotBeStoredFaithfullyIsRefused() {
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        String body = """
+                {"id":"%s","service":"probe-\\ud800","environment":"production",
+                 "deployedAt":"%s","outcome":"SUCCESS","changes":[]}
+                """.formatted(id(), deployedAt);
+
+        ResponseEntity<String> res = post("/api/v1/deployments", body);
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(res.getBody()).contains("unpaired surrogate");
+
+        assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE service LIKE 'probe-%'")
+                .query(Integer.class).single()).isZero();
     }
 
     // --- corrections that arrive later --------------------------------------
@@ -591,6 +676,148 @@ class ApiIntegrationTest {
         postIncident(incidentId, service, "abc", detected, null);
         assertThat(postIncident(incidentId, service, "abc", detected.minus(1, ChronoUnit.HOURS), null)
                 .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    /**
+     * A correction must match the deployment it corrects in every field but the
+     * outcome.
+     *
+     * <p>{@code differsOnlyByOutcome} could be replaced with {@code return true}
+     * and the suite stayed green, because no test varied a non-outcome field
+     * <em>and</em> the outcome together. Under that mutation a POST changing
+     * the environment while flipping to ROLLED_BACK is applied as a
+     * "correction", and since only the outcome and hash are written, the row's
+     * payload_hash then describes a payload the row does not contain.
+     */
+    @Test
+    void aCorrectionCarryingADifferentPayloadIs409() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(2, ChronoUnit.HOURS);
+        Instant authoredAt = deployedAt.minus(1, ChronoUnit.HOURS);
+        String aaa = """
+                    {"commitSha":"aaa","authoredAt":"%s"}
+                """.formatted(authoredAt);
+        String bbb = """
+                    {"commitSha":"bbb","authoredAt":"%s"}
+                """.formatted(authoredAt);
+
+        postDeployment(eventId, service, "production", deployedAt, "SUCCESS", aaa);
+
+        // Right transition, wrong commits.
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "ROLLED_BACK", bbb)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        // Right transition, wrong environment.
+        assertThat(postDeployment(eventId, service, "staging", deployedAt, "ROLLED_BACK", aaa)
+                .getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT outcome FROM deployment_event WHERE id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("SUCCESS");
+        assertThat(db.sql("SELECT commit_sha FROM deployment_change WHERE deployment_id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("aaa");
+    }
+
+    /**
+     * A correction to a multi-commit deployment, which is what a real rollback
+     * is.
+     *
+     * <p>The replay comparison uses an order-sensitive {@code List.equals}
+     * against rows read back {@code ORDER BY ordinal}. Reversing that ordering
+     * turns a legal rollback of any multi-commit deployment into a 409 -- a
+     * dropped ROLLED_BACK and an understated change failure rate -- and no test
+     * performed a correction on more than one change, so the ordering was right
+     * by luck rather than by assertion.
+     */
+    @Test
+    void aCorrectionToAMultiCommitDeploymentIsAccepted() {
+        String service = svc();
+        String eventId = id();
+        Instant deployedAt = Instant.now().minus(2, ChronoUnit.HOURS);
+        String changes = """
+                    {"commitSha":"aaa","authoredAt":"%s"},
+                    {"commitSha":"bbb","authoredAt":"%s"},
+                    {"commitSha":"ccc","authoredAt":"%s"}
+                """.formatted(deployedAt.minus(3, ChronoUnit.HOURS),
+                              deployedAt.minus(2, ChronoUnit.HOURS),
+                              deployedAt.minus(1, ChronoUnit.HOURS));
+
+        assertThat(postDeployment(eventId, service, "production", deployedAt, "SUCCESS", changes)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<String> corrected =
+                postDeployment(eventId, service, "production", deployedAt, "ROLLED_BACK", changes);
+        assertThat(corrected.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(corrected.getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+
+        assertThat(db.sql("SELECT string_agg(commit_sha, ',' ORDER BY ordinal) "
+                + "FROM deployment_change WHERE deployment_id = ?")
+                .param(eventId).query(String.class).single()).isEqualTo("aaa,bbb,ccc");
+
+        // Re-posting the corrected payload is now the retry, which pins that
+        // the correction rewrote payload_hash to match the row.
+        ResponseEntity<String> retry =
+                postDeployment(eventId, service, "production", deployedAt, "ROLLED_BACK", changes);
+        assertThat(retry.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(retry.getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
+    }
+
+    @Test
+    void anIdenticalIncidentReplayIsARetryNotACreate() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        assertThat(postIncident(incidentId, service, "abc", detected, null)
+                .getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<String> retry = postIncident(incidentId, service, "abc", detected, null);
+        assertThat(retry.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(parse(retry.getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
+
+        assertThat(db.sql("SELECT count(*) FROM incident_event WHERE id = ?")
+                .param(incidentId).query(Integer.class).single()).isEqualTo(1);
+    }
+
+    @Test
+    void aResolutionCarryingADifferentBlameCommitIs409() {
+        String service = svc();
+        String incidentId = id();
+        Instant detected = Instant.now().minus(4, ChronoUnit.HOURS);
+
+        postIncident(incidentId, service, "abc", detected, null);
+        assertThat(postIncident(incidentId, service, "def", detected, detected.plus(30, ChronoUnit.MINUTES))
+                .getStatusCode())
+                .as("a resolution must not silently rewrite which commit is blamed")
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        assertThat(db.sql("SELECT caused_by_commit_sha FROM incident_event WHERE id = ?")
+                .param(incidentId).query(String.class).single()).isEqualTo("abc");
+    }
+
+    /**
+     * One service's events never appear in another's report.
+     *
+     * <p>The filter is implemented twice -- in SQL and again in
+     * {@code DoraCalculator} -- and each half covered for the other, so all
+     * five mutations removing one of them individually left the suite green.
+     * Removing both fails seven tests. The suite proved the pair worked and had
+     * never exercised either member.
+     */
+    @Test
+    void oneServicesEventsNeverAppearInAnothersReport() {
+        String mine = svc();
+        String theirs = svc();
+        Instant at = Instant.now().minus(1, ChronoUnit.HOURS);
+
+        postDeployment(id(), theirs, "production", at, "SUCCESS", """
+                    {"commitSha":"other","authoredAt":"%s"}
+                """.formatted(at.minus(1, ChronoUnit.HOURS)));
+        postIncident(id(), theirs, "other", at, at.plus(10, ChronoUnit.MINUTES));
+
+        JsonNode report = report(mine);
+        assertThat(metric(report, "deployment_frequency").get("state").asText()).isEqualTo("UNOBSERVED");
+        assertThat(metric(report, "time_to_restore").get("state").asText()).isEqualTo("UNOBSERVED");
+        assertThat(metric(report, "lead_time_for_changes").get("state").asText()).isEqualTo("UNOBSERVED");
     }
 
     // --- strictness survives the framework ---------------------------------
