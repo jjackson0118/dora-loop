@@ -23,8 +23,18 @@ gradle-wrapper=4
 # Tests actually executed, not declared. Currently 85.
 jvm-test=60
 
-# Commits in the scanned range. Grows with history; floor is a lower bound.
-secrets=15
+# Commits in the scanned range -- and the range depends on the mode, which is
+# why this is 1 rather than a number that looks more impressive.
+#
+# The reusable pipeline runs this gate with GATE_SECRETS_MODE=diff, so its
+# denominator is the size of the change under review, not the depth of history:
+# a one-commit PR legitimately scans one commit. A floor of 15, taken from a
+# local history-mode run, failed the first PR it saw -- correctly, and the fault
+# was the floor. A change-scoped gate cannot carry a meaningful minimum, and the
+# thing actually protecting it is the vacuity rule in lib/gate.sh, which turns a
+# zero denominator into exit 2. Declaring 1 says that out loud rather than
+# implying coverage this number cannot give.
+secrets=1
 
 # Shell files. This is a JVM project, so the count is small and stable.
 shellcheck=1
