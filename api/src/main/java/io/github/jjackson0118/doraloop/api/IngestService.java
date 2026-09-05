@@ -176,6 +176,20 @@ class IngestService {
             // past DUPLICATE above. A perturbation found that: deleting the
             // second guard broke no test, because nothing could reach it.
             if (stored.resolvedAt() != null) {
+                // Already resolved with the SAME time is a retry, not a conflict.
+                //
+                // Found in CI and not locally, by the concurrency test: two
+                // identical resolutions race, the loser re-reads after the
+                // winner commits, and sees a resolved incident. Answering 409
+                // there tells a producer its own successful delivery collided
+                // with something -- for a duplicate delivery of a resolution,
+                // which is the ordinary case this path exists to serve. The
+                // hash check above cannot catch it, because it read the row
+                // before the winner committed.
+                if (stored.resolvedAt().equals(event.resolvedAt())) {
+                    return new IngestDtos.IngestAccepted(
+                            dto.id(), IngestDtos.Disposition.DUPLICATE, warningsForIncident(event, dto));
+                }
                 throw new ConflictingReplay("incident " + dto.id() + " is already resolved at "
                         + stored.resolvedAt() + "; resolution cannot be moved or cleared");
             }
@@ -201,6 +215,12 @@ class IngestService {
             }
         }
 
+        return new IngestDtos.IngestAccepted(
+                dto.id(), disposition, warningsForIncident(event, dto));
+    }
+
+    private static List<IngestDtos.Warning> warningsForIncident(
+            IncidentEvent event, IngestDtos.IncidentDto dto) {
         List<IngestDtos.Warning> warnings = new ArrayList<>();
         if (!event.isPlausible()) {
             warnings.add(new IngestDtos.Warning(
@@ -208,7 +228,7 @@ class IngestService {
                     "resolvedAt " + dto.resolvedAt() + " precedes detectedAt " + dto.detectedAt()
                             + "; excluded from time to restore, counted by data_quality.suspect_incidents"));
         }
-        return new IngestDtos.IngestAccepted(dto.id(), disposition, warnings);
+        return warnings;
     }
 
     private static boolean differsOnlyByOutcome(DeploymentEvent stored, DeploymentEvent incoming) {
