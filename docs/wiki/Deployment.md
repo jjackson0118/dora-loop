@@ -256,11 +256,35 @@ injecting defects into the live VM. This successful live run demonstrates the
 happy path; it does not claim a live CI rollback rehearsal or external-user
 reachability. Smoke runs on the target against its configured bridge listener.
 
-Deployment-event reporting is implemented as described below. Its first live
-CI rehearsal remains pending. The API accepts orthogonal `verification`
-evidence and conservatively defaults omitted values to `UNVERIFIED`; see
+The API accepts orthogonal `verification` evidence and conservatively defaults
+omitted values to `UNVERIFIED`; see
 [Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections).
-The service is deployed; automatic event reporting awaits its first live CI rehearsal.
+
+## First verified deployment event
+
+On 2026-09-06,
+[run 34051994184, attempt 1](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184/attempts/1)
+deployed `9a7159ec65eb2df1d2bba218d529edfb360affef` and posted event
+`jjackson0118/dora-loop:run:34051994184:attempt:1` as `SUCCESS / VERIFIED`.
+The receipt acknowledged that exact ID with HTTP 201 `STORED`. Independent
+read-back confirmed the same build identity and current/last-good targets,
+readiness HTTP 200, and the matching database record. The change set contained
+the one new commit since the previous deployed baseline.
+
+The service report moved from no deployment observations to one. Verification
+quality reported zero unverified deployments with one observation. Restore time
+remained `UNOBSERVED`: this successful deployment supplied no recovery evidence.
+The default 30-day deployment-frequency threshold still reported `DEGRADED`;
+a first observation is not evidence of sustained delivery performance.
+
+Reposting the saved payload as the deploy user returned HTTP 200 `DUPLICATE` for
+the same ID. The database remained at six total events, exactly one for that ID;
+the five pre-existing records were preserved. This confirms the live replay
+path without inventing another deployment. The original receipt was retained
+and the replay receipt saved separately.
+
+This records the first successful event-reporting run, not the latest running
+commit. No live fault was injected and no live CI rollback is claimed.
 
 ## Deployment-event reporting
 
