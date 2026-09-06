@@ -32,3 +32,13 @@ This is why the obvious integration is wrong: `git log -1 --format=%aI` returns
 the merge commit on a squash or merge, which reports a lead time near zero. The
 pipeline has to track the previously deployed SHA and pass the whole range. See
 [ADR 0002](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0002-lead-time-is-per-change.md).
+
+### Deployment evidence
+
+A reported outcome does not guarantee its verification completed.
+`data_quality.unverified_deployments` counts production events without
+conclusive evidence in the same service and time window. No events is
+UNOBSERVED, all verified is an observed zero, and any unverified event is
+DEGRADED. This includes failed rollouts. The four DORA formulas retain their
+reported-outcome semantics; the quality signal makes the evidence gap visible
+alongside them and in the summary.

@@ -41,6 +41,16 @@ class CanonicalGoldenTest {
                 "deployment/v1|2|e1|3|pay|4|prod|20|2026-09-05T12:00:00Z|7|SUCCESS|n=1|3|aaa|20|2026-09-05T10:00:00Z");
     }
 
+    @Test void verificationEncodingKeepsLegacyBytesAndSeparatesVerifiedEvidence() {
+        var absent = new IngestDtos.DeploymentDto("e1", "pay", "prod", T, "SUCCESS", List.of());
+        var unverified = new IngestDtos.DeploymentDto("e1", "pay", "prod", T, "SUCCESS", List.of(), "UNVERIFIED");
+        var verified = new IngestDtos.DeploymentDto("e1", "pay", "prod", T, "SUCCESS", List.of(), "VERIFIED");
+        assertThat(IngestService.canonical(absent)).isEqualTo(IngestService.canonical(unverified));
+        assertThat(IngestService.canonical(verified)).isEqualTo(
+                "deployment/v2|2|e1|3|pay|4|prod|20|2026-09-05T12:00:00Z|7|SUCCESS|n=0|8|VERIFIED");
+        assertThat(IngestService.canonical(absent)).isNotEqualTo(IngestService.canonical(verified));
+    }
+
     /** Kills M06 (the two namespaces must not share a tag) and M41 (null marker). */
     @Test
     @DisplayName("the incident encoding is exactly this string, and carries its own version tag")

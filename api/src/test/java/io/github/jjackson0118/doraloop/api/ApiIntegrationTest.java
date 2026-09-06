@@ -96,15 +96,123 @@ class ApiIntegrationTest {
      */
     @Test
     void flywayAppliedTheCheckedInMigration() {
-        String version = db.sql("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank")
-                .query(String.class).single();
-        assertThat(version).isEqualTo("1");
+        List<String> versions = db.sql("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank")
+                .query(String.class).list();
+        assertThat(versions).containsExactly("1", "2");
 
         assertThat(db.sql("""
                 SELECT count(*) FROM information_schema.tables
                  WHERE table_schema = 'public'
                    AND table_name IN ('deployment_event','deployment_change','incident_event')
                 """).query(Integer.class).single()).isEqualTo(3);
+    }
+
+    // Verification is independent evidence, with monotonic full-payload corrections.
+    private ResponseEntity<String> postVerification(String id, String service, Instant at, String outcome, String verification) {
+        String field = verification == null ? "" : ",\"verification\":\"" + verification + "\"";
+        return post("/api/v1/deployments", """
+                {"id":"%s","service":"%s","environment":"production","deployedAt":"%s",
+                 "outcome":"%s","changes":[]%s}
+                """.formatted(id, service, at, outcome, field));
+    }
+
+    @Test void verificationDefaultsRoundTripsAndAdvancesWithoutChangingOutcome() {
+        String id = id(), service = svc();
+        Instant at = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MICROS);
+        assertThat(parse(postVerification(id, service, at, "SUCCESS", null).getBody()).get("disposition").asText()).isEqualTo("STORED");
+        assertThat(repo.findDeployment(id).orElseThrow().verification().name()).isEqualTo("UNVERIFIED");
+        assertThat(parse(postVerification(id, service, at, "SUCCESS", "UNVERIFIED").getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
+        assertThat(metric(report(service), "data_quality.unverified_deployments").get("value").asDouble()).isEqualTo(1);
+        assertThat(parse(postVerification(id, service, at, "SUCCESS", "VERIFIED").getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+        assertThat(repo.findDeployment(id).orElseThrow().verification().name()).isEqualTo("VERIFIED");
+        assertThat(repo.deploymentsFor(service).getFirst().verification().name()).isEqualTo("VERIFIED");
+        assertThat(metric(report(service), "data_quality.unverified_deployments").get("state").asText()).isEqualTo("OK");
+        assertThat(metric(report(service), "data_quality.unverified_deployments").get("value").asDouble()).isZero();
+        assertThat(parse(postVerification(id, service, at, "SUCCESS", "VERIFIED").getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
+        assertThat(postVerification(id, service, at, "SUCCESS", null).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(postVerification(id, service, at, "SUCCESS", "UNVERIFIED").getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(postVerification(id, service, at, "ROLLED_BACK", "UNVERIFIED").getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(parse(postVerification(id, service, at, "ROLLED_BACK", "VERIFIED").getBody()).get("disposition").asText()).isEqualTo("UPDATED");
+        assertThat(postVerification(id, service, at, "SUCCESS", "VERIFIED").getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test void verificationRejectsMalformedValuesAndImmutableChanges() {
+        Instant at = Instant.now().minusSeconds(60);
+        for (String value : List.of("", "verified", "UNKNOWN", " VERIFIED")) {
+            String id = id();
+            assertThat(postVerification(id, svc(), at, "SUCCESS", value).getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(repo.findDeployment(id)).isEmpty();
+        }
+        String id = id(), service = svc();
+        postVerification(id, service, at, "FAILED_ROLLOUT", null);
+        assertThat(postVerification(id, service, at, "FAILED_ROLLOUT", "VERIFIED").getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(postVerification(id, service, at, "SUCCESS", "VERIFIED").getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(postVerification(id, service, at.plusSeconds(1), "FAILED_ROLLOUT", "VERIFIED").getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test void concurrentVerificationAndRollbackCannotEraseEachOther() throws Exception {
+        String id = id(), service = svc();
+        Instant at = Instant.now().minusSeconds(60);
+        postVerification(id, service, at, "SUCCESS", null);
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            CyclicBarrier barrier = new CyclicBarrier(2);
+            Future<ResponseEntity<String>> verification = pool.submit(() -> {
+                barrier.await(); return postVerification(id, service, at, "SUCCESS", "VERIFIED");
+            });
+            Future<ResponseEntity<String>> rollback = pool.submit(() -> {
+                barrier.await(); return postVerification(id, service, at, "ROLLED_BACK", "VERIFIED");
+            });
+            assertThat(verification.get(20, TimeUnit.SECONDS).getStatusCode()).isIn(HttpStatus.OK, HttpStatus.CONFLICT);
+            assertThat(rollback.get(20, TimeUnit.SECONDS).getStatusCode()).isEqualTo(HttpStatus.OK);
+        }
+        var stored = repo.findDeployment(id).orElseThrow();
+        assertThat(stored.outcome().name()).isEqualTo("ROLLED_BACK");
+        assertThat(stored.verification().name()).isEqualTo("VERIFIED");
+        assertThat(parse(postVerification(id, service, at, "ROLLED_BACK", "VERIFIED").getBody()).get("disposition").asText()).isEqualTo("DUPLICATE");
+    }
+
+    @Test void v1DatabaseUpgradesConservativelyAndLegacyReplayStillWorks() {
+        String schema = "migration_" + UUID.randomUUID().toString().replace("-", "");
+        var source = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                POSTGRES.getJdbcUrl() + "&currentSchema=" + schema, POSTGRES.getUsername(), POSTGRES.getPassword());
+        org.flywaydb.core.Flyway.configure().dataSource(source).schemas(schema).target("1").load().migrate();
+        JdbcClient isolated = JdbcClient.create(source);
+        // Literal pre-upgrade wire bytes, deliberately not today's canonical().
+        String hash = payloadHash("deployment/v1|2|e1|3|pay|4|prod|20|2026-09-05T12:00:00Z|7|SUCCESS|n=0");
+        isolated.sql("INSERT INTO deployment_event (id,service,environment,deployed_at,outcome,payload_hash) VALUES ('e1','pay','prod','2026-09-05T12:00:00Z','SUCCESS',?)")
+                .param(hash).update();
+        org.flywaydb.core.Flyway.configure().dataSource(source).schemas(schema).load().migrate();
+        assertThat(isolated.sql("SELECT verification FROM deployment_event").query(String.class).single()).isEqualTo("UNVERIFIED");
+        assertThat(isolated.sql("SELECT payload_hash FROM deployment_event").query(String.class).single()).isEqualTo(hash);
+        var repository = new EventRepository(isolated);
+        var service = new IngestService(repository);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(source));
+        var original = new IngestDtos.DeploymentDto("e1", "pay", "prod", Instant.parse("2026-09-05T12:00:00Z"), "SUCCESS", List.of());
+        assertThat(transaction.execute(status -> service.accept(original)).disposition()).isEqualTo(IngestDtos.Disposition.DUPLICATE);
+        var explicit = new IngestDtos.DeploymentDto("e1", "pay", "prod", original.deployedAt(), "SUCCESS", List.of(), "UNVERIFIED");
+        assertThat(transaction.execute(status -> service.accept(explicit)).disposition()).isEqualTo(IngestDtos.Disposition.DUPLICATE);
+        var verified = new IngestDtos.DeploymentDto("e1", "pay", "prod", original.deployedAt(), "SUCCESS", List.of(), "VERIFIED");
+        assertThat(transaction.execute(status -> service.accept(verified)).disposition()).isEqualTo(IngestDtos.Disposition.UPDATED);
+        assertThat(repository.findDeployment("e1").orElseThrow().verification().name()).isEqualTo("VERIFIED");
+        // An older binary can still insert after this additive migration.
+        isolated.sql("INSERT INTO deployment_event (id,service,environment,deployed_at,outcome,payload_hash) VALUES ('old-client','pay','prod',now(),'SUCCESS','legacy')").update();
+        assertThat(repository.findDeployment("old-client").orElseThrow().verification().name()).isEqualTo("UNVERIFIED");
+        assertThatThrownBy(() -> isolated.sql("UPDATE deployment_event SET verification = 'UNKNOWN' WHERE id = 'e1'").update())
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> isolated.sql("UPDATE deployment_event SET verification = NULL WHERE id = 'e1'").update())
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+    }
+
+    @Test void legacyHashCannotHideNewerVerificationEvidence() {
+        String id = id(), service = svc();
+        Instant at = Instant.now().minusSeconds(60).truncatedTo(ChronoUnit.MICROS);
+        postVerification(id, service, at, "SUCCESS", "VERIFIED");
+        // Simulate an old binary writing its v1 hash after additive migration.
+        String legacyHash = payloadHash(IngestService.canonical(new IngestDtos.DeploymentDto(id, service, "production", at, "SUCCESS", List.of())));
+        db.sql("UPDATE deployment_event SET payload_hash = ? WHERE id = ?").params(legacyHash, id).update();
+        assertThat(postVerification(id, service, at, "SUCCESS", null).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(repo.findDeployment(id).orElseThrow().verification().name()).isEqualTo("VERIFIED");
     }
 
     // --- the round trip ----------------------------------------------------
@@ -297,7 +405,7 @@ class ApiIntegrationTest {
 
         // No boolean health field survived the trip to the wire.
         assertThat(res.getBody()).doesNotContain("\"ok\"").doesNotContain("\"healthy\"");
-        assertThat(report.get("summary").get("unobserved")).hasSize(6);
+        assertThat(report.get("summary").get("unobserved")).hasSize(7);
     }
 
     /**
@@ -1713,8 +1821,8 @@ class ApiIntegrationTest {
      */
     @Test
     void correctingAnAbsentDeploymentUpdatesNothingAndSaysSo() {
-        assertThatThrownBy(() -> repo.updateDeploymentOutcome(
-                "no-such-deployment", io.github.jjackson0118.doraloop.core.Outcome.ROLLED_BACK, "h"))
+        assertThatThrownBy(() -> repo.updateDeploymentState(
+                "no-such-deployment", io.github.jjackson0118.doraloop.core.Outcome.ROLLED_BACK, io.github.jjackson0118.doraloop.core.Verification.UNVERIFIED, "h"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("corrected 0");
     }

@@ -4,6 +4,7 @@ import io.github.jjackson0118.doraloop.core.Change;
 import io.github.jjackson0118.doraloop.core.DeploymentEvent;
 import io.github.jjackson0118.doraloop.core.IncidentEvent;
 import io.github.jjackson0118.doraloop.core.Outcome;
+import io.github.jjackson0118.doraloop.core.Verification;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -24,9 +25,9 @@ class EventRepository {
         this.db = db;
     }
 
-    /** @return the stored payload hash if this id already exists */
+    /** Locks an existing deployment until the ingest transaction commits. Returns its payload hash. */
     Optional<String> existingDeploymentHash(String id) {
-        return db.sql("SELECT payload_hash FROM deployment_event WHERE id = ?")
+        return db.sql("SELECT payload_hash FROM deployment_event WHERE id = ? FOR UPDATE")
                 .param(id).query(String.class).optional();
     }
 
@@ -53,11 +54,11 @@ class EventRepository {
      */
     boolean insertDeployment(DeploymentEvent e, String payloadHash) {
         int rows = db.sql("""
-                INSERT INTO deployment_event (id, service, environment, deployed_at, outcome, payload_hash)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO deployment_event (id, service, environment, deployed_at, outcome, verification, payload_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO NOTHING""")
                 .params(e.id(), e.service(), e.environment(),
-                        Timestamp.from(e.deployedAt()), e.outcome().name(), payloadHash)
+                        Timestamp.from(e.deployedAt()), e.outcome().name(), e.verification().name(), payloadHash)
                 .update();
         if (rows == 0) {
             return false;
@@ -99,28 +100,21 @@ class EventRepository {
                 .list();
 
         return db.sql("""
-                SELECT id, service, environment, deployed_at, outcome
+                SELECT id, service, environment, deployed_at, outcome, verification
                 FROM deployment_event WHERE id = ?""")
                 .param(id)
                 .query((rs, n) -> new DeploymentEvent(
                         rs.getString("id"), rs.getString("service"), rs.getString("environment"),
                         changes, rs.getTimestamp("deployed_at").toInstant(),
-                        Outcome.valueOf(rs.getString("outcome"))))
+                        Outcome.valueOf(rs.getString("outcome")),
+                        Verification.valueOf(rs.getString("verification"))))
                 .optional();
     }
 
-    /**
-     * The only field of a recorded deployment that may change.
-     *
-     * <p>A rollback is reported after the deployment it undoes, so the outcome
-     * has to be correctable or the correction is lost. Everything else about a
-     * deployment is a statement about a past event and cannot legitimately
-     * change; the service decides which transitions are legal, and this only
-     * carries them out.
-     */
-    void updateDeploymentOutcome(String id, Outcome outcome, String payloadHash) {
-        int rows = db.sql("UPDATE deployment_event SET outcome = ?, payload_hash = ? WHERE id = ?")
-                .params(outcome.name(), payloadHash, id)
+    /** Caller holds the deployment row lock while checking monotonic corrections. */
+    void updateDeploymentState(String id, Outcome outcome, Verification verification, String payloadHash) {
+        int rows = db.sql("UPDATE deployment_event SET outcome = ?, verification = ?, payload_hash = ? WHERE id = ?")
+                .params(outcome.name(), verification.name(), payloadHash, id)
                 .update();
         if (rows != 1) {
             throw new IllegalStateException("expected to correct 1 deployment, corrected " + rows);
@@ -187,14 +181,15 @@ class EventRepository {
                 }).list();
 
         return db.sql("""
-                SELECT id, service, environment, deployed_at, outcome
+                SELECT id, service, environment, deployed_at, outcome, verification
                 FROM deployment_event WHERE service = ?""")
                 .param(service)
                 .query((rs, n) -> new DeploymentEvent(
                         rs.getString("id"), rs.getString("service"), rs.getString("environment"),
                         changes.getOrDefault(rs.getString("id"), List.of()),
                         rs.getTimestamp("deployed_at").toInstant(),
-                        Outcome.valueOf(rs.getString("outcome"))))
+                        Outcome.valueOf(rs.getString("outcome")),
+                        Verification.valueOf(rs.getString("verification"))))
                 .list();
     }
 

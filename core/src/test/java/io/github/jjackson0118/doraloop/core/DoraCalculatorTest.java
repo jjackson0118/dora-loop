@@ -163,7 +163,7 @@ class DoraCalculatorTest {
                 assertThat(m.state()).isEqualTo(SignalState.UNOBSERVED);
                 assertThat(m.value()).isNull();
             });
-            assertThat(r.unobserved()).hasSize(6);
+            assertThat(r.unobserved()).hasSize(7);
             assertThat(r.alerting()).isEmpty();
         }
     }

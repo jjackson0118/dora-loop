@@ -4,6 +4,7 @@ import io.github.jjackson0118.doraloop.core.Change;
 import io.github.jjackson0118.doraloop.core.DeploymentEvent;
 import io.github.jjackson0118.doraloop.core.IncidentEvent;
 import io.github.jjackson0118.doraloop.core.Outcome;
+import io.github.jjackson0118.doraloop.core.Verification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,7 +55,10 @@ class IngestService {
      * {@code FAILED_ROLLOUT} means the change never reached production, so it
      * cannot follow a success or be followed by one -- a retry that then
      * succeeded is a different deployment with its own id. {@code ROLLED_BACK}
-     * is terminal. Everything else is a conflict.
+     * is terminal. Verification may independently advance UNVERIFIED to VERIFIED,
+     * including with a rollback correction. Neither field may regress; a stale
+     * full payload conflicts rather than overwriting stronger evidence. The row
+     * is locked before hash comparison to serialize concurrent corrections.
      */
     @Transactional
     IngestDtos.IngestAccepted accept(IngestDtos.DeploymentDto dto) {
@@ -65,6 +69,8 @@ class IngestService {
             throw new IllegalArgumentException(
                     "outcome must be one of SUCCESS, FAILED_ROLLOUT, ROLLED_BACK");
         }
+
+        Verification verification = verification(dto.verification());
 
         rejectIllFormed("id", dto.id());
         rejectIllFormed("service", dto.service());
@@ -78,7 +84,7 @@ class IngestService {
                 .map(c -> new Change(c.commitSha(), storable(c.authoredAt()))).toList();
         DeploymentEvent event = new DeploymentEvent(
                 dto.id(), dto.service(), dto.environment(), changes,
-                storable(dto.deployedAt()), outcome);
+                storable(dto.deployedAt()), outcome, verification);
 
         String hash = hash(canonical(dto));
         Optional<String> existing = repo.existingDeploymentHash(dto.id());
@@ -99,22 +105,28 @@ class IngestService {
                         "insert conflicted on " + dto.id() + " but no row is visible");
             }
         }
-        if (existing.get().equals(hash)) {
+        DeploymentEvent stored = repo.findDeployment(dto.id()).orElseThrow(
+                () -> new IllegalStateException("hash row exists without an event: " + dto.id()));
+        // Also compare the stored event: an older binary can write a v1 hash
+        // while leaving the additive verification column unchanged.
+        if (existing.get().equals(hash) && stored.equals(event)) {
             return new IngestDtos.IngestAccepted(
                     dto.id(), IngestDtos.Disposition.DUPLICATE, warningsFor(event));
         }
 
-        DeploymentEvent stored = repo.findDeployment(dto.id()).orElseThrow(
-                () -> new IllegalStateException("hash row exists without an event: " + dto.id()));
-
-        if (differsOnlyByOutcome(stored, event)) {
-            if (stored.outcome() == Outcome.SUCCESS && outcome == Outcome.ROLLED_BACK) {
-                repo.updateDeploymentOutcome(dto.id(), outcome, hash);
+        if (sameDeploymentFacts(stored, event)) {
+            boolean legalOutcome = stored.outcome() == outcome
+                    || (stored.outcome() == Outcome.SUCCESS && outcome == Outcome.ROLLED_BACK);
+            boolean legalVerification = stored.verification() == verification
+                    || (stored.verification() == Verification.UNVERIFIED && verification == Verification.VERIFIED);
+            if (legalOutcome && legalVerification) {
+                repo.updateDeploymentState(dto.id(), outcome, verification, hash);
                 return new IngestDtos.IngestAccepted(
                         dto.id(), IngestDtos.Disposition.UPDATED, warningsFor(event));
             }
             throw new ConflictingReplay("deployment " + dto.id() + " is recorded as "
-                    + stored.outcome() + "; " + outcome + " is not a legal correction of that");
+                    + stored.outcome() + "/" + stored.verification()
+                    + "; " + outcome + "/" + verification + " is not a legal correction of that");
         }
         throw new ConflictingReplay(
                 "id " + dto.id() + " already exists with a different payload");
@@ -233,7 +245,7 @@ class IngestService {
         return warnings;
     }
 
-    private static boolean differsOnlyByOutcome(DeploymentEvent stored, DeploymentEvent incoming) {
+    private static boolean sameDeploymentFacts(DeploymentEvent stored, DeploymentEvent incoming) {
         return stored.service().equals(incoming.service())
                 && stored.environment().equals(incoming.environment())
                 && stored.deployedAt().equals(incoming.deployedAt())
@@ -381,7 +393,10 @@ class IngestService {
      * hashes loudly rather than silently comparing across two schemes.
      */
     static String canonical(IngestDtos.DeploymentDto d) {
-        StringBuilder sb = new StringBuilder("deployment/v1");
+        // Preserve the v1 bytes for legacy and explicit UNVERIFIED payloads.
+        // V2 evidence cannot collide with a pre-migration hash or claim it was verified.
+        boolean verified = verification(d.verification()) == Verification.VERIFIED;
+        StringBuilder sb = new StringBuilder(verified ? "deployment/v2" : "deployment/v1");
         field(sb, d.id());
         field(sb, d.service());
         field(sb, d.environment());
@@ -392,7 +407,21 @@ class IngestService {
             field(sb, c.commitSha());
             field(sb, storable(c.authoredAt()).toString());
         }
+        if (verified) {
+            field(sb, "VERIFIED");
+        }
         return sb.toString();
+    }
+
+    private static Verification verification(String value) {
+        if (value == null) {
+            return Verification.UNVERIFIED;
+        }
+        try {
+            return Verification.valueOf(value);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("verification must be one of VERIFIED, UNVERIFIED");
+        }
     }
 
     static String canonical(IngestDtos.IncidentDto d) {

@@ -36,8 +36,14 @@ final class IngestDtos {
             @NotBlank String environment,
             @NotNull Instant deployedAt,
             @NotBlank String outcome,
-            @NotNull @Valid List<ChangeDto> changes
-    ) {}
+            @NotNull @Valid List<ChangeDto> changes,
+            String verification
+    ) {
+        DeploymentDto(String id, String service, String environment, Instant deployedAt,
+                String outcome, List<ChangeDto> changes) {
+            this(id, service, environment, deployedAt, outcome, changes, null);
+        }
+    }
 
     record IncidentDto(
             @NotBlank String id,

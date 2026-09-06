@@ -29,14 +29,22 @@ public record DeploymentEvent(
         String environment,
         List<Change> changes,
         Instant deployedAt,
-        Outcome outcome
+        Outcome outcome,
+        Verification verification
 ) {
+    /** Existing producers carry no verification evidence. */
+    public DeploymentEvent(String id, String service, String environment,
+            List<Change> changes, Instant deployedAt, Outcome outcome) {
+        this(id, service, environment, changes, deployedAt, outcome, Verification.UNVERIFIED);
+    }
+
     public DeploymentEvent {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(service, "service");
         Objects.requireNonNull(environment, "environment");
         Objects.requireNonNull(deployedAt, "deployedAt");
         Objects.requireNonNull(outcome, "outcome");
+        Objects.requireNonNull(verification, "verification");
         changes = List.copyOf(Objects.requireNonNull(changes, "changes"));
     }
 
