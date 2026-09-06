@@ -12,9 +12,6 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.time.Duration;
-import java.time.Instant;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -37,9 +34,19 @@ import static org.assertj.core.api.Assertions.assertThat;
  * endpoint, which needs no database to answer that a service is
  * {@code UNOBSERVED}.
  *
- * <p>So this stops the container and asserts the answer arrives inside a
- * budget. The budget is the assertion; the status code alone would have passed
- * against the 30-second behaviour this test exists to prevent returning.
+ * <p>This class asserts the <em>verdict</em>: database gone means readiness 503
+ * and liveness untouched. It deliberately does NOT assert how long that takes,
+ * because it cannot. Stopping a Testcontainers Postgres unbinds its port, the
+ * connection is refused instantly, and readiness answers in about 19ms whether
+ * the pool timeout is 3 seconds or 30 — measured, by putting the defect back
+ * and watching this class pass. A timing assertion here would have looked like
+ * coverage and been incapable of failing.
+ *
+ * <p>The timing property is proven in
+ * {@link ReadinessWhenDatabaseIsUnreachableTest}, which points the datasource
+ * at an unrouted address so packets are dropped rather than refused and the
+ * pool is forced to be the thing that gives up. That one does go red when the
+ * timeout is restored to its default.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "dora.ingest.token=readiness-test-secret")
@@ -55,13 +62,6 @@ class ReadinessWhenDatabaseIsGoneTest {
     @ServiceConnection
     static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine");
 
-    /**
-     * The caller's patience. Generous against the 3s pool timeout so a slow CI
-     * runner does not make this flaky, and far below the 30s it is written to
-     * catch — a threshold calibrated where it will actually run.
-     */
-    private static final Duration BUDGET = Duration.ofSeconds(12);
-
     @Autowired TestRestTemplate http;
 
     @AfterAll
@@ -75,7 +75,7 @@ class ReadinessWhenDatabaseIsGoneTest {
     }
 
     @Test
-    void readinessGoesDownAndDoesSoBeforeAnyoneGivesUp() {
+    void readinessGoesDownWhenTheDatabaseIsStopped() {
         assertThat(http.getForEntity("/actuator/health/readiness", String.class).getStatusCode())
                 .as("baseline: readiness must be UP before the database is stopped, or "
                         + "this test proves nothing about stopping it")
@@ -83,18 +83,12 @@ class ReadinessWhenDatabaseIsGoneTest {
 
         POSTGRES.stop();
 
-        Instant start = Instant.now();
         ResponseEntity<String> res = http.getForEntity("/actuator/health/readiness", String.class);
-        Duration took = Duration.between(start, Instant.now());
 
         assertThat(res.getStatusCode())
                 .as("readiness with no database")
                 .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         assertThat(res.getBody()).contains("DOWN");
-        assertThat(took)
-                .as("readiness answered correctly but took %s; the caller has to be told "
-                        + "before it gives up, or a refusal is indistinguishable from a hang", took)
-                .isLessThan(BUDGET);
     }
 
     @Test
