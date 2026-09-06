@@ -79,8 +79,29 @@ class ApiController {
      */
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     @GetMapping("/services/{service}/report")
-    ReportDtos.ReportDto report(@PathVariable String service,
+    ReportDtos.ReportDto report(@PathVariable("service") String rawService,
                                 @RequestParam(defaultValue = "P30D") String window) {
+        // The path variable arrives percent-encoded, so it is decoded here.
+        //
+        // Measured before this: POST a deployment for a service named
+        // "sp ace-..." and the row is written; GET the report for it returns
+        // 200 with every metric UNOBSERVED and the service echoed back as
+        // "sp%20ace-...". The lookup was for the encoded literal, which matches
+        // nothing, so the answer was a clean report about a service that has
+        // data. Every test used a UUID-based name that needs no encoding, so
+        // nothing saw it.
+        //
+        // That is worse than a wrong number. The javadoc above defends
+        // 200-with-UNOBSERVED as the honest answer when nothing was measured;
+        // here the measurement exists and the endpoint says it does not, which
+        // is the failure this project is entirely about, in its read path.
+        //
+        // Decoded by hand rather than with URLDecoder, which is a
+        // form-decoder: it turns "+" into a space, so a service legitimately
+        // named "pl+us" would silently become "pl us" -- swapping one wrong
+        // lookup for another.
+        String service = decodePathSegment(rawService);
+
         Duration w;
         try {
             w = Duration.parse(window);
@@ -93,6 +114,33 @@ class ApiController {
         return ReportDtos.ReportDto.from(
                 new DoraCalculator(clock, w, thresholds)
                         .calculate(service, repo.deploymentsFor(service), repo.incidentsFor(service)));
+    }
+
+    /** Percent-decoding only: {@code +} is a literal here, not a space. */
+    private static String decodePathSegment(String raw) {
+        if (raw.indexOf('%') < 0) {
+            return raw;
+        }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(raw.length());
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (c == '%') {
+                if (i + 2 >= raw.length()) {
+                    throw new IllegalArgumentException("truncated percent-escape in service name");
+                }
+                int hi = Character.digit(raw.charAt(i + 1), 16);
+                int lo = Character.digit(raw.charAt(i + 2), 16);
+                if (hi < 0 || lo < 0) {
+                    throw new IllegalArgumentException("invalid percent-escape in service name");
+                }
+                out.write((hi << 4) + lo);
+                i += 2;
+            } else {
+                out.write(String.valueOf(c).getBytes(java.nio.charset.StandardCharsets.UTF_8), 0,
+                        String.valueOf(c).getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            }
+        }
+        return out.toString(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     // --- error shape -------------------------------------------------------
