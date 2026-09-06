@@ -28,6 +28,29 @@ import static org.mockito.Mockito.verify;
  */
 class IngestAuthFilterTest {
 
+    /** A token that is configured, for the cases that must reach the comparison. */
+    private static final String TOKEN = "filter-unit-test-secret";
+
+    /**
+     * A status no branch of the filter sets, stamped by the chain.
+     *
+     * <p>{@code MockHttpServletResponse.getStatus()} is 200 from construction,
+     * so "assert 200" is true of a response nothing has touched. Two tests here
+     * asserted exactly that and would have passed against a filter that swallowed
+     * the request silently. A distinctive value makes the assertion observe the
+     * chain running instead of observing the mock's initial state.
+     */
+    private static final int PASSED_THROUGH = 299;
+
+    private static FilterChain stampingChain() throws Exception {
+        FilterChain chain = mock(FilterChain.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            ((MockHttpServletResponse) invocation.getArgument(1)).setStatus(PASSED_THROUGH);
+            return null;
+        }).when(chain).doFilter(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        return chain;
+    }
+
     private static MockHttpServletRequest write() {
         MockHttpServletRequest r = new MockHttpServletRequest("POST", "/api/v1/deployments");
         r.setRequestURI("/api/v1/deployments");
@@ -59,13 +82,17 @@ class IngestAuthFilterTest {
         MockHttpServletRequest read = new MockHttpServletRequest("GET", "/api/v1/services/x/report");
         read.setRequestURI("/api/v1/services/x/report");
         MockHttpServletResponse response = new MockHttpServletResponse();
-        FilterChain chain = mock(FilterChain.class);
+        FilterChain chain = stampingChain();
 
         filter.doFilter(read, response, chain);
 
+        // 299, not 200. MockHttpServletResponse reports 200 before anything
+        // touches it, so asserting 200 here passed whether the chain ran or
+        // not -- the assertion was decoration and only the verify() below was
+        // load-bearing, which is not what the sentence above it claimed.
         assertThat(response.getStatus())
                 .as("the report is deliberately readable without a token")
-                .isEqualTo(200);
+                .isEqualTo(PASSED_THROUGH);
         verify(chain).doFilter(read, response);
     }
 
@@ -86,20 +113,45 @@ class IngestAuthFilterTest {
      */
     @Test
     void aWriteOutsideTheApiPrefixIsRefusedToo() throws Exception {
+        // /actuator/env is deliberately absent: EnvironmentEndpoint carries
+        // only a @ReadOperation, so POST /actuator/env is not a write endpoint
+        // in Spring Boot at all. An earlier version of this list included it,
+        // which cost nothing here -- a MockHttpServletRequest reaches no
+        // dispatcher, so a path that does not exist looks exactly like one
+        // that does. That is the shape of an assertion which cannot notice it
+        // is aimed at nothing.
         for (String path : new String[]{
-                "/actuator/loggers/ROOT", "/actuator/env", "/actuator/shutdown", "/", "/anything"}) {
-            IngestAuthFilter filter = new IngestAuthFilter("");
+                "/actuator/loggers/ROOT", "/actuator/shutdown", "/", "/anything"}) {
             MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
             request.setRequestURI(path);
-            MockHttpServletResponse response = new MockHttpServletResponse();
-            FilterChain chain = mock(FilterChain.class);
 
-            filter.doFilter(request, response, chain);
+            // Configured: the request must reach the token comparison and be
+            // refused by it. Asserting only the unconfigured 503 would pass
+            // against a filter whose comparison always returned "match", which
+            // is not what this test's name claims.
+            MockHttpServletResponse refused = new MockHttpServletResponse();
+            FilterChain chain = stampingChain();
+            new IngestAuthFilter(TOKEN).doFilter(request, refused, chain);
+            assertThat(refused.getStatus()).as("POST %s with no token", path).isEqualTo(403);
+            verify(chain, never()).doFilter(request, refused);
 
-            assertThat(response.getStatus())
-                    .as("POST %s on an unconfigured service", path)
-                    .isEqualTo(503);
-            verify(chain, never()).doFilter(request, response);
+            // The same path with the token goes through, so the 403 above is
+            // the token being checked and not the path being rejected.
+            MockHttpServletResponse allowed = new MockHttpServletResponse();
+            FilterChain passing = stampingChain();
+            MockHttpServletRequest authorised = new MockHttpServletRequest("POST", path);
+            authorised.setRequestURI(path);
+            authorised.addHeader(IngestAuthFilter.HEADER, TOKEN);
+            new IngestAuthFilter(TOKEN).doFilter(authorised, allowed, passing);
+            assertThat(allowed.getStatus()).as("POST %s with the token", path)
+                    .isEqualTo(PASSED_THROUGH);
+
+            // And unconfigured refuses it before any comparison happens.
+            MockHttpServletResponse unconfigured = new MockHttpServletResponse();
+            FilterChain never = stampingChain();
+            new IngestAuthFilter("").doFilter(request, unconfigured, never);
+            assertThat(unconfigured.getStatus())
+                    .as("POST %s on an unconfigured service", path).isEqualTo(503);
         }
     }
 
@@ -116,15 +168,16 @@ class IngestAuthFilterTest {
     void anUnknownMethodIsTreatedAsAWrite() throws Exception {
         for (String method : new String[]{
                 "PUT", "PATCH", "DELETE", "PROPPATCH", "MKCOL", "FROBNICATE"}) {
-            IngestAuthFilter filter = new IngestAuthFilter("");
             MockHttpServletRequest request = new MockHttpServletRequest(method, "/api/v1/deployments");
             request.setRequestURI("/api/v1/deployments");
             MockHttpServletResponse response = new MockHttpServletResponse();
-            FilterChain chain = mock(FilterChain.class);
+            FilterChain chain = stampingChain();
 
-            filter.doFilter(request, response, chain);
+            // Configured, so the method is carried all the way to the token
+            // check rather than stopping at the unconfigured branch.
+            new IngestAuthFilter(TOKEN).doFilter(request, response, chain);
 
-            assertThat(response.getStatus()).as("%s on an unconfigured service", method).isEqualTo(503);
+            assertThat(response.getStatus()).as("%s with no token", method).isEqualTo(403);
             verify(chain, never()).doFilter(request, response);
         }
     }
@@ -142,11 +195,12 @@ class IngestAuthFilterTest {
             MockHttpServletRequest request = new MockHttpServletRequest(method, "/actuator/health");
             request.setRequestURI("/actuator/health");
             MockHttpServletResponse response = new MockHttpServletResponse();
-            FilterChain chain = mock(FilterChain.class);
+            FilterChain chain = stampingChain();
 
             filter.doFilter(request, response, chain);
 
-            assertThat(response.getStatus()).as("%s must not be refused", method).isEqualTo(200);
+            assertThat(response.getStatus())
+                    .as("%s must not be refused", method).isEqualTo(PASSED_THROUGH);
             verify(chain).doFilter(request, response);
         }
     }

@@ -20,8 +20,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * A write endpoint outside {@code /api/v1/} still requires the token.
  *
- * <p>This context deliberately exposes {@code loggers}, which the shipped
- * configuration does not. That single word is the whole point: the actuator's
+ * <p>This context deliberately enables and exposes {@code loggers}, which the
+ * shipped configuration does neither. It took one property when this test was
+ * written and takes two now, because the read-side fix
+ * ({@code endpoints.enabled-by-default: false}, see {@link ActuatorExposureTest})
+ * means exposing an endpoint no longer conjures it into existence. Both are the
+ * whole point: the actuator's
  * {@code POST /actuator/loggers/{name}} changes the running service's log
  * levels, and someone adding it to
  * {@code management.endpoints.web.exposure.include} while chasing a production
@@ -41,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "dora.ingest.token=exposed-actuator-secret",
+                "management.endpoint.loggers.enabled=true",
                 "management.endpoints.web.exposure.include=health,info,loggers"
         })
 @Testcontainers

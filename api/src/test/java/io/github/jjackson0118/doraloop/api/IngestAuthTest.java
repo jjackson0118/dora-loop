@@ -132,10 +132,22 @@ class IngestAuthTest {
      * opinion.
      *
      * <p>It now sweeps <em>every</em> {@code RequestMappingInfoHandlerMapping}
-     * in the context -- which includes the actuator's, a separate mapping the
-     * old version could not see at all -- and every method that is not GET,
-     * HEAD or OPTIONS, at any path. Path variables are filled with a literal so
-     * a templated pattern is actually requested rather than skipped.
+     * in the context -- including the actuator's, a separate mapping the old
+     * version could not see at all -- and every method that is not GET, HEAD or
+     * OPTIONS, at any path. Path variables are filled with a literal so a
+     * templated pattern is actually requested rather than skipped.
+     *
+     * <p>Its denominator is small and worth stating rather than implying: in
+     * this context it probes four handler entries over three distinct paths
+     * ({@code /api/v1/deployments}, {@code /api/v1/incidents}, {@code /error}
+     * twice, being two handler methods on one mapping), and the actuator
+     * mapping contributes <em>zero</em>, because {@code include: health,info}
+     * maps only GETs. So the sweep is a regression detector for the endpoints
+     * this service has, not evidence about the actuator; that evidence is
+     * {@link ExposedActuatorWriteTest}, which exposes a write endpoint on
+     * purpose, and {@link ActuatorExposureTest}, which does the same for reads.
+     * The assertion below prints what it examined so the denominator is visible
+     * in the failure rather than only in this comment.
      */
     @Test
     void everyMappedWriteEndpointRequiresTheToken() {
@@ -179,7 +191,7 @@ class IngestAuthTest {
         // An empty scan is not a pass: if the mapping lookup ever stops finding
         // the write endpoints, this test would otherwise report success over
         // nothing.
-        assertThat(checked).as("write endpoints that were examined").isNotEmpty();
+        assertThat(checked).as("write endpoints that were examined: %s", checked).isNotEmpty();
         assertThat(unprotected).as("write endpoints answering without a token").isEmpty();
     }
 
@@ -205,6 +217,11 @@ class IngestAuthTest {
                 "POST /api/v1//deployments",
                 "POST /api/v1/deployments/",
                 "POST /api/v1/deployments;a=b",
+                // Found by an adversarial review, outside the corpus I wrote:
+                // a path parameter on the FIRST segment, so the raw URI starts
+                // "/;/" and no prefix test that reads getRequestURI() sees the
+                // api path at all.
+                "POST /;/api/v1/deployments",
                 "POST /API/V1/deployments",
                 "POST /api/v1/%64eployments",
                 "PUT /api/v1/deployments",
