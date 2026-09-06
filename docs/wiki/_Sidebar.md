@@ -13,3 +13,5 @@
 - [Source on GitHub](https://github.com/jjackson0118/dora-loop)
 - [delivery-gates](https://github.com/jjackson0118/delivery-gates) — the gates
   this repository is measured by
+
+* [Local quickstart](Local-Quickstart.md)
