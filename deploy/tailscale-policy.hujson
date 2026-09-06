@@ -31,13 +31,19 @@
     // Deliberately NOT opening 8080. CI has no reason to reach the application
     // port: the smoke test runs ON the target, over loopback, because a smoke
     // test that verifies a port the user never uses proves the wrong thing.
-    // Written in the same dialect as the rest of this tailnet's policy: the
-    // port goes in "ip" rather than appended to "dst". Both forms are valid;
-    // matching the surrounding file matters more than which one is canonical.
+    // Port appended to the destination, matching the existing rules in this
+    // tailnet's policy file (`"dst": ["frontdoor:443"]`).
+    //
+    // A previous version of this fragment used a separate "ip" field because
+    // that is how the admin console's rule table RENDERS a port. The rendering
+    // is not the file. Reading a system's presentation layer and writing code
+    // against what it displays is the same error as trusting a dashboard that
+    // shows 0% because nothing was measured -- which is the thing this
+    // repository is about.
     {
-      "src": ["tag:ci"],
-      "dst": ["tag:deploy-target"],
-      "ip":  ["22"],
+      "action": "accept",
+      "src":    ["tag:ci"],
+      "dst":    ["tag:deploy-target:22"],
     },
   ],
 
