@@ -1,0 +1,144 @@
+# Publish docs/wiki/ to the GitHub wiki.
+#
+# The wiki is a separate git repository, which is the whole reason the sources
+# live here instead: authored under review, versioned with the code they
+# describe, and checked by gates/docs.sh. This job is only the delivery step.
+#
+# It is written to fail loudly rather than to no-op. A docs publish that
+# quietly does nothing is a green check mark standing over stale documentation,
+# which is the exact failure this repository exists to argue against -- so the
+# job asserts it found pages, asserts it published them, and asserts the
+# published wiki matches the sources afterwards.
+name: publish-wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/wiki/**'
+      - '.github/workflows/publish-wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  # Needed to push to the wiki repository. GITHUB_TOKEN is tried first so this
+  # needs no personal access token; set a WIKI_TOKEN secret only if GitHub
+  # refuses it for wiki repositories, which is reported to vary.
+  contents: write
+
+concurrency:
+  # Two runs pushing to the same wiki repository race and one loses. Serialise
+  # rather than discover it as an intermittent non-fast-forward.
+  group: publish-wiki-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Count the pages to publish
+        id: sources
+        run: |
+          set -euo pipefail
+          n=$(find docs/wiki -name '*.md' -type f | wc -l)
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          # The denominator. Publishing zero pages is not success, and without
+          # this the job is green in exactly the case where the sources have
+          # been moved, renamed or deleted by mistake.
+          if [ "$n" -eq 0 ]; then
+            echo "::error::no pages found under docs/wiki -- refusing to publish an empty wiki"
+            exit 1
+          fi
+          echo "found $n page(s)"
+          find docs/wiki -name '*.md' -type f | sort | sed 's/^/  /'
+
+      - name: Clone the wiki repository
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          # The wiki repository does not exist until its first page has been
+          # created through the web UI, and GitHub has no API for that. A clone
+          # failure here almost always means that one-time step is outstanding,
+          # so say so rather than printing a bare 'repository not found'.
+          cat > /tmp/askpass <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf 'x-access-token\n' ;;
+            *) printf '%s\n' "$WIKI_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 /tmp/askpass
+          export GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0
+          if ! git clone --quiet "https://github.com/${GITHUB_REPOSITORY}.wiki.git" /tmp/wiki; then
+            echo "::error::cannot clone ${GITHUB_REPOSITORY}.wiki.git. If this repository's wiki has never had a page, create one in the web UI once; the wiki repository does not exist until then."
+            exit 1
+          fi
+
+      - name: Render the sources into wiki pages
+        run: |
+          set -euo pipefail
+          # Remove pages that no longer have a source, so a deleted page
+          # actually disappears instead of lingering as a stale page nothing
+          # links to and nobody notices.
+          find /tmp/wiki -maxdepth 1 -name '*.md' -type f -delete
+
+          for src in docs/wiki/*.md; do
+            base=$(basename "$src")
+            # Intra-wiki links are written as Page-Name.md so they resolve when
+            # the sources are browsed in this repository. The wiki serves pages
+            # at /wiki/Page-Name with no extension, so the same link 404s once
+            # published. gates/docs.sh enforces that these only ever address
+            # another wiki page, which is what makes this rewrite safe.
+            sed -E 's/\]\(([A-Za-z0-9._-]+)\.md\)/](\1)/g' "$src" > "/tmp/wiki/$base"
+          done
+
+          published=$(find /tmp/wiki -maxdepth 1 -name '*.md' -type f | wc -l)
+          expected=${{ steps.sources.outputs.count }}
+          if [ "$published" -ne "$expected" ]; then
+            echo "::error::rendered $published page(s) from $expected source(s)"
+            exit 1
+          fi
+          echo "rendered $published page(s)"
+
+      - name: Publish
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          export GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0
+          cd /tmp/wiki
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki already matches the sources; nothing to publish"
+            exit 0
+          fi
+          git commit -q -m "docs: publish from ${GITHUB_SHA:0:12}"
+          git push --quiet
+          echo "published at $(git rev-parse --short HEAD)"
+
+      - name: Verify the published wiki matches the sources
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          # A push that reported success and a wiki that actually serves the new
+          # content are two different claims. Re-clone and diff rather than
+          # trusting the exit code of the push.
+          export GIT_ASKPASS=/tmp/askpass GIT_TERMINAL_PROMPT=0
+          rm -rf /tmp/verify
+          git clone --quiet "https://github.com/${GITHUB_REPOSITORY}.wiki.git" /tmp/verify
+          rc=0
+          for src in docs/wiki/*.md; do
+            base=$(basename "$src")
+            sed -E 's/\]\(([A-Za-z0-9._-]+)\.md\)/](\1)/g' "$src" > /tmp/expected.md
+            if ! diff -q /tmp/expected.md "/tmp/verify/$base" >/dev/null 2>&1; then
+              echo "::error::published wiki does not match source: $base"
+              rc=1
+            fi
+          done
+          [ "$rc" -eq 0 ] && echo "verified ${{ steps.sources.outputs.count }} page(s) against the published wiki"
+          exit "$rc"
