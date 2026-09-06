@@ -49,17 +49,27 @@ If the harness fails, retained partial evidence is not a pass. Inspect the dispo
 
 After review, stop and delete only the explicitly identified disposable VM using your normal LXD procedure. Publish a sanitized verification record, not its disk, credentials, or unrestricted logs.
 
-## Verification record template
+## Observed verification — 2026-09-06
 
-- Date:
-- Harness commit:
-- Baseline / candidate / gates refs:
-- Target isolation checked:
-- PostgreSQL recovery / initial readiness:
-- Smoke defect: exit, served SHA, stored outcome:
-- Inconclusive: exit, served SHA, stored verification:
-- Delivery failure: exit, absent receipt, unchanged row count:
-- Replay: STORED then DUPLICATE, stable hash and count:
-- Independent reviewer:
-- Evidence artifact:
-- Limitations or failed assertions:
+All scenarios above passed against an isolated copy with no NIC or profiles,
+PostgreSQL recovered successfully, and initial readiness returned HTTP 200.
+The [machine-readable evidence](evidence/2026-09-06-operational-rehearsal.json)
+records exact served identities, decisions, events, receipts and source hashes.
+
+- Smoke defect: exit 1; baseline restored; ROLLED_BACK / VERIFIED; row count 7 → 8.
+- Inconclusive smoke: exit 2; candidate retained; SUCCESS / UNVERIFIED; 8 → 9.
+- Delivery failure: exit 2; candidate retained; no receipt; count stayed 9.
+- Replay after restoring the credential: STORED then DUPLICATE; count 10 then 10,
+  with unchanged payload bytes.
+
+The initial seven rows came from the copied database; none were removed. The
+serving demo database was not used for these rehearsals. An earlier harness
+attempt stopped before activation because its parent directory used the wrong
+group; the corrected run above passed. Partial output from that attempt is not
+counted as evidence. An independent agent reviewed the isolation controls and
+resulting evidence.
+
+These are target-side operational tests. They do not claim failure scenarios
+traversed GitHub/Tailscale, an actual application regression, or measured incident
+recovery time. The live GitHub happy path is recorded separately in
+[Deployment](wiki/Deployment.md).

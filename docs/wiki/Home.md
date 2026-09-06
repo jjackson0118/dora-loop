@@ -59,9 +59,10 @@ CI deployment and smoke verification succeeded on a private VM on 2026-09-06;
 Automatic deployment-event reporting also succeeded in
 [run 34051994184](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184).
 Independent database and report read-back confirmed `SUCCESS / VERIFIED`;
-replaying the saved event returned `DUPLICATE` without adding a row. Live fault
-injection and recovery remain unexercised; isolated failure tests cover those
-paths without claiming a live rehearsal.
+replaying the saved event returned `DUPLICATE` without adding a row. Target-side fault and recovery rehearsals now have
+[recorded evidence](https://github.com/jjackson0118/dora-loop/blob/main/docs/operational-rehearsal.md).
+Those tests use an isolated real service; they do not claim GitHub/Tailscale
+failure transport coverage.
 
 Nothing is published to the internet, deliberately. The report is readable
 without a token by design, and the service is reachable only on a private

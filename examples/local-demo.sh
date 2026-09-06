@@ -40,13 +40,13 @@ for jar in api/build/libs/*.jar; do [[ "$jar" == *-plain.jar ]] || jars+=("$jar"
 java -jar "${jars[0]}" --server.address=127.0.0.1 > "$scratch/app.log" 2>&1 &
 app_pid=$!
 for _attempt in {1..60}; do
-  if curl --fail --silent "http://127.0.0.1:$PORT/actuator/health/readiness" > "$scratch/health.json"; then break; fi
+  if curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail --silent "http://127.0.0.1:$PORT/actuator/health/readiness" > "$scratch/health.json"; then break; fi
   kill -0 "$app_pid"
   sleep 1
 done
-curl --fail --silent "http://127.0.0.1:$PORT/actuator/health/readiness"
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail --silent "http://127.0.0.1:$PORT/actuator/health/readiness"
 printf "\n"
-curl --fail --silent "http://127.0.0.1:$PORT/api/v1/services/quickstart/report" > "$scratch/before.json"
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail --silent "http://127.0.0.1:$PORT/api/v1/services/quickstart/report" > "$scratch/before.json"
 python3 - "$scratch" <<'PY'
 import json, sys
 from datetime import datetime, timedelta, timezone
@@ -58,13 +58,13 @@ event={"id":"quickstart-deployment-1","service":"quickstart","environment":"prod
 (root/"event.json").write_text(json.dumps(event))
 PY
 printf 'X-Dora-Ingest-Token: %s\n' "$DORA_INGEST_TOKEN" > "$scratch/auth-header"
-curl --fail-with-body --silent --show-error --write-out '\nHTTP %{http_code}\n' \
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail-with-body --silent --show-error --write-out '\nHTTP %{http_code}\n' \
   --header @"$scratch/auth-header" --header 'Content-Type: application/json' \
   --data-binary @"$scratch/event.json" "http://127.0.0.1:$PORT/api/v1/deployments"
-curl --fail-with-body --silent --show-error --write-out '\nHTTP %{http_code}\n' \
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail-with-body --silent --show-error --write-out '\nHTTP %{http_code}\n' \
   --header @"$scratch/auth-header" --header 'Content-Type: application/json' \
   --data-binary @"$scratch/event.json" "http://127.0.0.1:$PORT/api/v1/deployments"
-curl --fail --silent "http://127.0.0.1:$PORT/api/v1/services/quickstart/report" > "$scratch/after.json"
+curl --noproxy '*' --connect-timeout 2 --max-time 5 --fail --silent "http://127.0.0.1:$PORT/api/v1/services/quickstart/report" > "$scratch/after.json"
 python3 - "$scratch" <<'PY'
 import json,sys
 from pathlib import Path

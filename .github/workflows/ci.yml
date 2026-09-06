@@ -7,10 +7,10 @@ permissions:
   contents: read
 jobs:
   pipeline:
-    uses: jjackson0118/delivery-gates/.github/workflows/reusable-jvm-pipeline.yml@a780e1d80ef173d22c914d54c52e0eec2431a250
+    uses: jjackson0118/delivery-gates/.github/workflows/reusable-jvm-pipeline.yml@d18ea16be1b52e288adae887fc981ff7fb8b974b
     with:
       java-version: "21"
-      gates-ref: a780e1d80ef173d22c914d54c52e0eec2431a250
+      gates-ref: d18ea16be1b52e288adae887fc981ff7fb8b974b
   deploy-scripts:
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jjackson0118/delivery-gates
-          ref: a780e1d80ef173d22c914d54c52e0eec2431a250
+          ref: d18ea16be1b52e288adae887fc981ff7fb8b974b
           path: .delivery-gates
       - uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6.0.0
         with:

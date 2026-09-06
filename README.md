@@ -64,6 +64,26 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 4. [Thresholds are a per-service value, not compiled-in constants](docs/adr/0004-thresholds-are-configurable.md)
 5. [Verification is independent deployment evidence](docs/adr/0005-verification-is-independent-evidence.md)
 
+## Review or reproduce
+
+Start with the [local quickstart](https://github.com/jjackson0118/dora-loop/wiki/Local-Quickstart)
+to build, test, and exercise the API without deployment credentials. For review,
+follow the [design decisions](docs/adr/) and
+[operational failure evidence](docs/operational-rehearsal.md). The
+[delivery-gates repository](https://github.com/jjackson0118/delivery-gates)
+contains the portable gate contract and fault proofs.
+
+```mermaid
+flowchart LR
+    Commit[Commit] --> Gates[CI gates]
+    Gates --> Deploy[Immutable release]
+    Deploy --> Smoke[Smoke verification]
+    Smoke --> Recovery[Keep or guarded rollback]
+    Recovery --> Event[Replayable deployment event]
+    Event --> API[DORA API and database]
+    API --> Report[Metrics and evidence quality]
+```
+
 ## Observed delivery loop
 
 [CI run 34051994184](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184)
