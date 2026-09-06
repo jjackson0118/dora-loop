@@ -53,10 +53,10 @@ Non-obvious decisions are recorded as ADRs in the repository:
 
 ## Honest limits
 
-The loop the name refers to does not close yet. The service is manually deployed
-on a private VM. CI orchestration is implemented and fixture-tested, with an
-authenticated Actions rehearsal pending. Posting its own `DeploymentEvent`
-remains separate work.
+CI deployment and smoke verification succeeded on a private VM on 2026-09-06;
+[Deployment](Deployment.md) records the run and independent build read-back.
+The loop the name refers to does not close yet: posting its own
+`DeploymentEvent` and representing unverified deployments remain separate work.
 
 Nothing is published to the internet, deliberately. The report is readable
 without a token by design, and the service is reachable only on a private
