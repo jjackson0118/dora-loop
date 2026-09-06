@@ -55,9 +55,12 @@ Non-obvious decisions are recorded as ADRs in the repository:
 
 CI deployment and smoke verification succeeded on a private VM on 2026-09-06;
 [Deployment](Deployment.md) records the run and independent build read-back.
-The verification field is implemented, and automatic deployment-event reporting
-is wired with replayable failure evidence. The first authenticated run of event
-reporting is still pending; fixture tests do not substitute for that rehearsal.
+Automatic deployment-event reporting also succeeded in
+[run 34051994184](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184).
+Independent database and report read-back confirmed `SUCCESS / VERIFIED`;
+replaying the saved event returned `DUPLICATE` without adding a row. Live fault
+injection and recovery remain unexercised; isolated failure tests cover those
+paths without claiming a live rehearsal.
 
 Nothing is published to the internet, deliberately. The report is readable
 without a token by design, and the service is reachable only on a private

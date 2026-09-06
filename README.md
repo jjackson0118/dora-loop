@@ -60,14 +60,18 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 4. [Thresholds are a per-service value, not compiled-in constants](docs/adr/0004-thresholds-are-configurable.md)
 5. [Verification is independent deployment evidence](docs/adr/0005-verification-is-independent-evidence.md)
 
+## Observed delivery loop
+
+[CI run 34051994184](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184)
+on 2026-09-06 deployed the service and recorded its own `SUCCESS / VERIFIED`
+event. Independent target, database, and report read-back agreed; replaying the
+same payload returned `DUPLICATE` without adding a row. The
+[deployment record](https://github.com/jjackson0118/dora-loop/wiki/Deployment)
+contains the evidence and limits. Missing verification remains explicit in
+`data_quality.unverified_deployments`.
+
 ## Roadmap
 
-- Rehearse the newly implemented deployment-event reporting path in live CI.
-  The pipeline saves the full change range and observed outcome, posts it from
-  the target, and retains a replayable payload if delivery fails. The first
-  authenticated deployment-event rehearsal is still pending.
-  Missing verification evidence remains explicit in
-  `data_quality.unverified_deployments`.
 - Bounding the report query, which currently loads a service's whole history
   and windows it in memory.
 
