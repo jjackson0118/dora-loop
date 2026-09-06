@@ -35,6 +35,24 @@ server:
 spring.lifecycle.timeout-per-shutdown-phase: 20s
 
 management:
+  # Default-deny at the ENABLEMENT layer, not just the exposure layer.
+  #
+  # Exposure decides what is published; enablement decides what exists. Listing
+  # health,info in exposure.include is one word away from publishing something
+  # else, and the write endpoints are not the dangerous half. GET
+  # /actuator/heapdump answers 200 with a 61 MB heap dump that contains
+  # dora.ingest.token in cleartext -- measured, seventeen occurrences -- and no
+  # authentication filter here will ever look at it, because it is a GET and
+  # reads are deliberately open. Boot sanitizes /env (it returns ******); it
+  # does not and cannot sanitize a heap dump.
+  #
+  # So a disabled endpoint stays gone even if someone widens exposure to "*"
+  # while debugging a production incident, which is exactly the mistake this
+  # configuration expects someone to make. Asserted by ActuatorExposureTest,
+  # which sets exposure to "*" on purpose.
+  endpoints.enabled-by-default: false
+  endpoint.health.enabled: true
+  endpoint.info.enabled: true
   endpoints.web.exposure.include: health,info
   endpoint.health:
     probes.enabled: true
