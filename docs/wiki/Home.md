@@ -53,9 +53,10 @@ Non-obvious decisions are recorded as ADRs in the repository:
 
 ## Honest limits
 
-The loop the name refers to does not close yet. Nothing is deployed, so the
-pipeline does not currently post its own `DeploymentEvent` back here — that is
-the next piece of work, not a description of what runs today.
+The loop the name refers to does not close yet. The service is manually deployed
+on a private VM. CI orchestration is implemented and fixture-tested, with an
+authenticated Actions rehearsal pending. Posting its own `DeploymentEvent`
+remains separate work.
 
 Nothing is published to the internet, deliberately. The report is readable
 without a token by design, and the service is reachable only on a private

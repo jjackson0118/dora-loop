@@ -29,8 +29,8 @@
     // role, which is the thing that should survive a rebuild.
     //
     // Deliberately NOT opening 8080. CI has no reason to reach the application
-    // port: the smoke test runs ON the target, over loopback, because a smoke
-    // test that verifies a port the user never uses proves the wrong thing.
+    // port: smoke runs ON the target against its consumer-facing bridge listener.
+    // This verifies the listener, not consumer-to-target network reachability.
     // Port appended to the destination, matching the existing rules in this
     // tailnet's policy file (`"dst": ["frontdoor:443"]`).
     //

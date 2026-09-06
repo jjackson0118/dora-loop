@@ -49,6 +49,8 @@ else
 fi
 
 FROM=$(readlink "$APP_DIR/current" 2>/dev/null || echo '<none>')
+# Optional orchestration ownership guard, evaluated while holding the lock.
+[ -z "${3:-}" ] || [ "$FROM" = "$3" ] || die "current moved; refusing to withdraw a peer release"
 say "rolling back from $FROM to $PREVIOUS"
 
 ln -sfn "$PREVIOUS" "$APP_DIR/current"
