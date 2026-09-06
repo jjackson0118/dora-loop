@@ -118,6 +118,8 @@ PY
             checksum = hashlib.file_digest((case / "app.jar").open("rb"), "sha256").hexdigest()
             result = deploy(["env", "NO_PROXY=*", "no_proxy=*", "SMOKE_SETTLE=4", "SMOKE_TIMEOUT=2",
                              "bash", "deploy/remote-orchestrate.sh", CANDIDATE, checksum, url], case)
+            (case / "orchestrator-private.log").write_text(result.stdout + result.stderr)
+            (case / "orchestrator-private.log").chmod(0o600)
             TOKEN.write_bytes(original_token_file)
             if server:
                 server.shutdown()

@@ -57,7 +57,7 @@ def main():
             for name in ["deploy", "gates", "history.json", "rehearsal-target.py"]:
                 bundle.add(root / name, arcname=name)
         remote = command("lxc", "exec", args.target, "--", "mktemp", "-d", "/tmp/dora-rehearsal.XXXXXXXX").decode().strip()
-        command("lxc", "exec", args.target, "--", "chown", "root:dora", remote)
+        command("lxc", "exec", args.target, "--", "chown", "root:deploy", remote)
         command("lxc", "exec", args.target, "--", "chmod", "750", remote)
         command("lxc", "file", "push", str(root / "bundle.tar"), args.target + remote + "/bundle.tar")
         command("lxc", "exec", args.target, "--", "tar", "-xf", remote + "/bundle.tar", "-C", remote)
