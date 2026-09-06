@@ -52,21 +52,38 @@ class IngestAuthFilter extends OncePerRequestFilter {
     }
 
     /**
-     * Write endpoints only.
+     * Anything that is not a read requires the token, at any path.
      *
-     * <p>Matched on the servlet path and the method rather than on a URL
-     * pattern with a wildcard, so a future endpoint under {@code /api/v1/} is
-     * unprotected only if someone adds it as a POST and does not notice this
-     * filter -- which the test asserts against by enumerating the mapped write
-     * endpoints rather than the ones it remembers.
+     * <p>This deliberately does not look at the path. An earlier version
+     * engaged only for {@code POST} under {@code /api/v1/}, which left the
+     * service's safety resting on two different path normalizers agreeing:
+     * this filter's {@code startsWith} and the dispatcher's pattern matching. A
+     * raw-socket probe found where they disagree -- {@code //api/v1/deployments}
+     * and {@code /API/V1/deployments} skip this filter entirely, and were
+     * refused only because the dispatcher happened to answer 404. Nothing was
+     * writable, but nothing was making it so on purpose.
+     *
+     * <p>The concrete hazard was one word of configuration away.
+     * {@code /actuator/env}, {@code /actuator/loggers/{name}} and
+     * {@code /actuator/shutdown} are write endpoints; they answered 404 only
+     * because {@code management.endpoints.web.exposure.include} lists
+     * {@code health,info}. Adding {@code loggers} to that line -- the sort of
+     * thing done while debugging a production incident -- would have published
+     * an unauthenticated write endpoint, and no test here would have failed.
+     *
+     * <p>So the rule is the safe-method list, not an endpoint list: GET, HEAD
+     * and OPTIONS pass, and everything else -- POST, PUT, PATCH, DELETE, and
+     * any extension method this code has never heard of -- must present the
+     * token. An unrecognised method is treated as a write, because the
+     * alternative is deciding a method is safe without knowing what it does.
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        if (!"POST".equalsIgnoreCase(request.getMethod())) {
-            return true;
-        }
-        String path = request.getRequestURI();
-        return path == null || !path.startsWith("/api/v1/");
+        String method = request.getMethod();
+        return method != null
+                && ("GET".equalsIgnoreCase(method)
+                || "HEAD".equalsIgnoreCase(method)
+                || "OPTIONS".equalsIgnoreCase(method));
     }
 
     @Override
