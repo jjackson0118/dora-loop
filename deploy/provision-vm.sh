@@ -73,7 +73,16 @@ step "directories"
 # symlink flip and a restart, prepared before the change rather than improvised
 # after it -- which is the only kind of rollback that works during an incident.
 install -d -o "$DEPLOY_USER" -g "$APP_USER" -m 0750 "$APP_DIR" "$APP_DIR/releases"
-install -d -o root -g "$APP_USER" -m 0750 "$ETC_DIR"
+# 0751, not 0750. The deploy account is not in the dora group, so with 0750 it
+# cannot TRAVERSE this directory -- and a path it cannot traverse is a file
+# whose own ownership never gets consulted. app.env is owned by deploy and mode
+# 0640, which looks correct in isolation and is unusable in place.
+#
+# Found by logging in as deploy over the real path and trying, not by reading:
+# every permission here looked right in the script. The "other" execute bit is
+# traverse-only -- it does not permit listing, and db.env stays unreadable to
+# deploy because that file is 0640 root:dora and deploy is neither.
+install -d -o root -g "$APP_USER" -m 0751 "$ETC_DIR"
 did "$APP_DIR (releases/, current -> a release) and $ETC_DIR"
 
 step "database"
@@ -134,6 +143,51 @@ install -o root -g root -m 0644 "$(dirname "$0")/dora-loop.service" \
 systemctl daemon-reload
 systemctl enable dora-loop >/dev/null 2>&1 || true
 did "installed and enabled dora-loop.service (not started: nothing is deployed)"
+
+step "verify the account can do its job, and nothing more"
+# Postconditions, asserted as the deploy user rather than assumed from the
+# modes set above. A provisioning script that reports success while leaving an
+# account unable to deploy -- or able to read a credential it should not -- has
+# produced a machine that fails later, somewhere less obvious.
+#
+# Both directions matter. Checking only that deploy CAN write is how you end up
+# with 0777; checking only that it CANNOT read is how you end up with a deploy
+# that cannot run.
+fails=0
+check() {  # check <description> <expect: allow|deny> <command>
+    if sudo -u "$DEPLOY_USER" sh -c "$3" >/dev/null 2>&1; then result=allow; else result=deny; fi
+    if [ "$result" = "$2" ]; then
+        printf '   ok    %s (%s)\n' "$1" "$2"
+    else
+        printf '   FAIL  %s: expected %s, got %s\n' "$1" "$2" "$result"
+        fails=$(( fails + 1 ))
+    fi
+}
+# The OPERATION, not the permission. `test -w` passes here and `sed -i` still
+# fails, because sed writes a temp file in the directory and renames it -- and
+# deploy has write on the file but deliberately not on $ETC_DIR. A rehearsal
+# over the real path found that; this check had said "ok" moments earlier.
+#
+# So the check now does what a deploy does: truncate and rewrite in place,
+# which needs only the file permission. It also asserts deploy CANNOT create a
+# sibling file, because that is the permission sed wanted and the one we are
+# choosing not to grant.
+check "deploy rewrites app.env in place" allow \
+    "cp $ETC_DIR/app.env /tmp/app.env.bak && cat /tmp/app.env.bak > $ETC_DIR/app.env"
+check "deploy creates a file in $ETC_DIR" deny "touch $ETC_DIR/.probe"
+check "deploy writes releases/"      allow "mkdir -p $APP_DIR/releases/.probe && rmdir $APP_DIR/releases/.probe"
+check "deploy reads db.env"          deny  "cat $ETC_DIR/db.env"
+check "deploy sudo-reads db.env"     deny  "sudo -n cat $ETC_DIR/db.env"
+check "deploy becomes root"          deny  "sudo -n -i true"
+check "deploy edits the unit"        deny  "sudo -n systemctl edit --force dora-loop </dev/null"
+check "deploy touches postgresql"    deny  "sudo -n systemctl restart postgresql"
+check "deploy reloads systemd"       deny  "sudo -n systemctl daemon-reload"
+check "deploy restarts dora-loop"    allow "sudo -n systemctl is-active dora-loop || true"
+
+if [ "$fails" -gt 0 ]; then
+    printf '\n   %s postcondition(s) failed; this host is not correctly provisioned\n' "$fails" >&2
+    exit 1
+fi
 
 step "done"
 did "provisioned. Deploy a release, then: systemctl start dora-loop"
