@@ -95,8 +95,10 @@ management:
     # thesis at the ops layer. Measured before and after; asserted by test.
     group.readiness.include: readinessState,db
   health.db.enabled: true
-  info.env.enabled: true
-
-info:
-  build:
-    sha: ${DORA_BUILD_SHA:unknown}
+  # info.env.enabled is DELETED, not set to false, and the info: block with it.
+  # It published properties under info.* -- which is how /actuator/info came to
+  # report ${DORA_BUILD_SHA}, a value the deploy writes into app.env. The deploy
+  # script then "verified" the running build by reading it back, which asked the
+  # deploy to confirm its own claim. The identity now comes from
+  # META-INF/build-info.properties, stamped into the artifact at build time and
+  # not writable by anything at deploy time.

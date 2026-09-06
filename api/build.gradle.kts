@@ -41,8 +41,38 @@ dependencies {
 // test asserts against it. Read from the build, never from a file the deploy
 // writes -- otherwise the assertion is against the deploy's own claim about
 // itself.
+//
+// That comment was already here and nothing acted on it. The manifest
+// attribute below was written and never read, while /actuator/info reported
+// ${DORA_BUILD_SHA}, an environment variable the deploy sets. So the check the
+// deploy script called its read-back was asking the deploy to confirm its own
+// claim, and a reviewer proved it: a release directory named "revtest2"
+// containing a jar byte-identical to another build reported "serving revtest2"
+// and the deploy passed.
+//
+// buildInfo() generates META-INF/build-info.properties into the artifact, which
+// Boot exposes at /actuator/info with no code of ours. It is on the classpath
+// in tests too, so the property can be asserted rather than only observed in
+// production.
+val buildSha: String =
+    (project.findProperty("buildSha") as String?)?.takeIf { it.isNotBlank() }
+        ?: runCatching {
+            providers.exec { commandLine("git", "rev-parse", "--short", "HEAD") }
+                .standardOutput.asText.get().trim()
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: "unknown"
+
+springBoot {
+    buildInfo {
+        properties {
+            additional.put("sha", buildSha)
+        }
+    }
+}
+
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     manifest {
-        attributes("Implementation-Version" to (project.findProperty("buildSha") ?: "unknown"))
+        // Same value, second surface. One source so the two cannot disagree.
+        attributes("Implementation-Version" to buildSha)
     }
 }

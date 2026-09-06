@@ -36,14 +36,18 @@ actual=$(sha256sum "$RELEASE_DIR/app.jar" | cut -d' ' -f1)
 say "jar verified ($actual)"
 
 # Verify the PREVIOUS step landed. app.env is written by the caller streaming
-# the token over stdin; if that failed, this deploy would activate new code
-# with a stale build identity -- exactly the failure observed in the rehearsal
-# that this file exists to prevent repeating.
-grep -qx "DORA_BUILD_SHA=$RELEASE_ID" "$ETC_DIR/app.env" \
-    || die "app.env does not carry DORA_BUILD_SHA=$RELEASE_ID; the environment step did not land"
+# the token over stdin; if that failed the service would start and refuse every
+# write with 503 while readiness reported 200, which no probe here would catch.
+#
+# It no longer checks a build identity in app.env, because there is no longer
+# one to check: the sha is stamped into the artifact by Gradle and read from
+# META-INF/build-info.properties. That is what makes the read-back below
+# meaningful rather than circular -- previously /actuator/info echoed a variable
+# this script had verified moments earlier, so a release directory could be
+# named anything at all and the deploy would confirm it.
 grep -q '^DORA_INGEST_TOKEN=..*' "$ETC_DIR/app.env" \
     || die "app.env has no ingest token; the service would refuse writes with 503"
-say "app.env carries this release"
+say "app.env carries an ingest token"
 
 # --- the rollback point, recorded before anything changes ------------------
 PREVIOUS=$(readlink "$APP_DIR/current" 2>/dev/null || true)

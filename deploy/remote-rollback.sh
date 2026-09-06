@@ -31,23 +31,22 @@ say "rolling back from $FROM to $PREVIOUS"
 
 ln -sfn "$PREVIOUS" "$APP_DIR/current"
 
-# The build identity is stamped in app.env, which the failed deploy rewrote.
-# Left alone, the rolled-back service would report the release we just backed
-# away from -- an operator checking whether the rollback worked would be told
-# it had not. Restoring it here keeps the stamp and the running code in
-# agreement, which is the property the deploy script also verifies.
+# app.env is deliberately NOT touched.
+#
+# An earlier version rewrote it here to restore the build identity, because the
+# identity used to live in DORA_BUILD_SHA. It does not any more -- it is stamped
+# into the artifact -- so re-pointing the symlink is sufficient and the rewrite
+# is gone.
+#
+# That deletion removes a real hazard rather than tidying. The rewrite read the
+# file, filtered a line and truncated with `>`; a reviewer killed it mid-write
+# and left app.env at zero bytes, destroying the only copy of the ingest token
+# on the host, which this account cannot recreate because it may not create
+# files in /etc/dora-loop. Worse, a rollback over a tokenless app.env passed
+# every one of this script's checks -- readiness 200, correct identity,
+# ROLLBACK OK -- while every ingest write answered 503. The safest version of
+# that code is none of it.
 RELEASE_ID=$(basename "$PREVIOUS")
-sed_free_rewrite() {
-    # No `sed -i`: it writes a temp file in the directory and renames, and the
-    # deploy account deliberately cannot create files in /etc/dora-loop. This
-    # truncates the existing inode instead, which needs only write on the file.
-    local tmp
-    tmp=$(grep -v '^DORA_BUILD_SHA=' /etc/dora-loop/app.env || true)
-    { printf '%s\n' "$tmp"; printf 'DORA_BUILD_SHA=%s\n' "$RELEASE_ID"; } \
-        > /etc/dora-loop/app.env
-}
-sed_free_rewrite
-say "build identity restored to $RELEASE_ID"
 
 sudo -n systemctl restart dora-loop
 say "restarted"
