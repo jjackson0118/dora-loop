@@ -78,9 +78,15 @@ the checked-in SQL was decorative.
 
 Those tests are perturbed too. The mutation that matters most is emptying
 `insertDeployment`: it left the pre-integration-test suite entirely green, and
-now fails 19 tests (measured, not remembered — it was written here as "seven"
-from the 14-test era and carried forward through three commits that grew the
-suite). A write boundary is verified by injecting a Postgres trigger that
+now fails 24 tests.
+
+That number has been wrong twice. It was "seven" from the 14-test era, carried
+through three commits that grew the suite; it was then corrected to 19, which
+was `ApiIntegrationTest` alone — the module I happened to run — while
+`IngestGapTest` contributed five more. The sentence claiming it had been
+re-measured was itself written from a partial measurement. `gates/jvm-test.sh`
+runs `./gradlew test --continue` precisely so one module's failure cannot
+truncate the count, and it would have reported 24 the first time. A write boundary is verified by injecting a Postgres trigger that
 raises mid-write and asserting nothing survives, rather than by reading the
 annotation — a review that read the annotation source in isolation concluded the
 boundary was inert, and measurement showed it was not.

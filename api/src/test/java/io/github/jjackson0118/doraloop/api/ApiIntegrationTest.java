@@ -849,7 +849,11 @@ class ApiIntegrationTest {
      * <p>The filter is implemented twice -- in SQL and again in
      * {@code DoraCalculator} -- and each half covered for the other, so all
      * five mutations removing one of them individually left the suite green.
-     * Removing both fails seven tests. The suite proved the pair worked and had
+     * Removing the deployments SQL filter and the calculator's deployment
+     * filter together fails 14 tests (12 api, 2 core), measured. This said
+     * "seven" until a reviewer counted -- a number about how much coverage the
+     * pair has, written from memory, in a comment whose subject is that the
+     * pair was never separately exercised. The suite proved the pair worked and had
      * never exercised either member.
      */
     @Test
@@ -1057,7 +1061,7 @@ class ApiIntegrationTest {
     // --- contention, constructed rather than hoped for ----------------------
 
     /**
-     * The four tests above release two threads from a barrier and hope they
+     * The barrier tests that used to be here released two threads and hoped they
      * collide. This block does not hope.
      *
      * <p>The hole in a barrier race is that the barrier releases both threads
@@ -1177,7 +1181,7 @@ class ApiIntegrationTest {
      * Two <em>conflicting</em> resolutions, which is the case the identical
      * race cannot see.
      *
-     * <p>{@link #concurrentIdenticalResolutionsAreNeverAServerError} races two
+     * <p>The deleted barrier test on this path raced two
      * copies of the same resolution, so the loser's behaviour leaves no trace: a
      * correct no-op and an illegal overwrite produce the same row and the same
      * 200. Two mutations survive it for that reason -- deleting
@@ -1243,7 +1247,7 @@ class ApiIntegrationTest {
     /**
      * The same interleaving with an identical resolution: a retry, not a
      * conflict. The deterministic form of
-     * {@link #concurrentIdenticalResolutionsAreNeverAServerError}.
+     * the deleted barrier test on this path.
      *
      * <p>{@code disposition} is asserted, not just the status, because that is
      * what separates "recognised the retry" from "overwrote a published restore
