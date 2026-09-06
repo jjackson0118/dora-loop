@@ -53,7 +53,10 @@ FROM=$(readlink "$APP_DIR/current" 2>/dev/null || echo '<none>')
 [ -z "${3:-}" ] || [ "$FROM" = "$3" ] || die "current moved; refusing to withdraw a peer release"
 say "rolling back from $FROM to $PREVIOUS"
 
-ln -sfn "$PREVIOUS" "$APP_DIR/current"
+# Publish by rename, just as activation does: readers must never see a missing
+# current link between unlink and symlink, even if rollback is interrupted.
+ln -sfn "$PREVIOUS" "$APP_DIR/.current.$$"
+mv -Tf "$APP_DIR/.current.$$" "$APP_DIR/current"
 
 # app.env is deliberately NOT touched.
 #

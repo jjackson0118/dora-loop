@@ -51,9 +51,11 @@
   // these connections and the policy below is the whole authorisation decision.
   //
   // `users` is `deploy` and nothing else. Not root, and not autogroup:nonroot,
-  // which would permit every non-root account on the host. The deploy account's
-  // sudo is three systemctl verbs against one unit, so this line plus that
-  // sudoers file is the complete blast radius of a compromised pipeline.
+  // which would permit every non-root account on the host. Sudo grants six
+  // systemctl verbs against dora-loop. These limit direct SSH/root access;
+  // they do not contain the application code CI deploys. That code runs as
+  // dora with the service credentials and database access. The systemd unit
+  // does not impose an outbound network allowlist on the application.
   "ssh": [
     {
       "action": "accept",

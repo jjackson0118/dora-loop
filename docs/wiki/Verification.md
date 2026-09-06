@@ -48,8 +48,11 @@ boundary was inert, and measurement showed it was not.
 limits of live coverage. [Local quickstart](Local-Quickstart.md) lists the Java,
 shell and Python test commands and provides a disposable API reproduction.
 The deployment-helper tests exercise smoke decisions, guarded recovery,
-transport, full-history payload generation and acknowledged event delivery;
-they are isolated fixture proofs, distinct from a live deployment rehearsal.
+transport, full-history payload generation and acknowledged event delivery.
+Rollback publication tests inject staging and rename failures into the actual
+script and check that neither changes the selected release nor restarts the
+service; a successful case checks publication and restart. These are isolated
+fixture proofs, distinct from a live deployment rehearsal.
 
 ## Operational failure evidence
 

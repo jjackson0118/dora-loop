@@ -57,10 +57,11 @@ else
     did "$DEPLOY_USER exists"
 fi
 
-# CI authenticates as this account, so what it is allowed to do is the blast
-# radius of a compromised pipeline. It gets three systemctl verbs against one
-# unit and nothing else -- not `systemctl *`, which would include `edit` and
-# therefore arbitrary root execution.
+# CI authenticates as this account. Sudo grants six systemctl verbs against
+# dora-loop, not arbitrary root commands or systemctl edit. This limits direct
+# administrative access, not the trust placed in deployed code: deploy can
+# replace the jar and restart it as dora, whose process receives the service
+# credentials and can access the database.
 # reset-failed is granted alongside the start limit being MOVED to [Unit], and
 # the two must ship together. Fixing the placement alone arms a trap: after
 # five failures the unit enters `failed`, `systemctl restart` answers "start
@@ -73,8 +74,7 @@ $DEPLOY_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart dora-loop, /usr/bin
 SUDOERS
 chmod 0440 /etc/sudoers.d/dora-loop
 visudo -cf /etc/sudoers.d/dora-loop >/dev/null
-# Six, counted rather than remembered. It said "three" while granting five, in
-# this line and in the wiki, from the day it was written.
+# Keep this count aligned with the explicit sudoers entry above.
 did "sudoers: six systemctl verbs on dora-loop, nothing else"
 
 step "directories"
@@ -99,7 +99,7 @@ if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'
     # Generated here and never transmitted. The application and the database
     # share a host and speak over loopback, so this password does not need to
     # exist anywhere else -- and a secret that exists in one place cannot drift
-    # between two. CI never learns it.
+    # between two. The normal deployment flow does not transmit it to CI.
     DB_PASS="$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 32)"
     sudo -u postgres psql -qc "CREATE ROLE $DB_USER LOGIN PASSWORD '$DB_PASS'" >/dev/null
     sudo -u postgres createdb -O "$DB_USER" "$DB_NAME"
@@ -132,8 +132,9 @@ else
 fi
 
 step "app environment placeholder"
-# Written by the deploy job on every release (token, build sha). Created empty
-# here so the unit can reference it before a first deploy has happened --
+# Populated during operator bootstrap or token rotation; releases preserve it.
+# Build identity is embedded in the jar, not this file. Created empty here so
+# the unit can reference it before a first deploy has happened --
 # systemd fails a unit whose EnvironmentFile is missing, and "the service will
 # not start on a fresh host" is a bad thing to discover during a deploy.
 #
@@ -177,7 +178,8 @@ check() {  # check <description> <expect: allow|deny> <command>
 # deploy has write on the file but deliberately not on $ETC_DIR. A rehearsal
 # over the real path found that; this check had said "ok" moments earlier.
 #
-# So the check now does what a deploy does: truncate and rewrite in place,
+# The check exercises the account's permitted token-rotation operation:
+# truncate and rewrite in place,
 # which needs only the file permission. It also asserts deploy CANNOT create a
 # sibling file, because that is the permission sed wanted and the one we are
 # choosing not to grant.
