@@ -69,6 +69,7 @@ class IngestService {
         rejectIllFormed("id", dto.id());
         rejectIllFormed("service", dto.service());
         rejectIllFormed("environment", dto.environment());
+        rejectUnaddressable(dto.service());
         for (int i = 0; i < dto.changes().size(); i++) {
             rejectIllFormed("changes[" + i + "].commitSha", dto.changes().get(i).commitSha());
         }
@@ -142,6 +143,7 @@ class IngestService {
         rejectIllFormed("id", dto.id());
         rejectIllFormed("service", dto.service());
         rejectIllFormed("causedByCommitSha", dto.causedByCommitSha());
+        rejectUnaddressable(dto.service());
 
         IncidentEvent event = new IncidentEvent(
                 dto.id(), dto.service(), dto.causedByCommitSha(),
@@ -301,6 +303,33 @@ class IngestService {
                         field + " contains an unpaired surrogate at index " + i
                                 + "; it cannot be stored or digested faithfully");
             }
+        }
+    }
+
+    /**
+     * Refuses a service name that could be stored but never read back.
+     *
+     * <p>The report endpoint addresses a service as a path segment, and a
+     * {@code /} cannot survive that round trip -- it either splits the path or,
+     * encoded, reaches the handler as a literal that matches no row. Either way
+     * the service becomes permanently unreadable while its events accumulate,
+     * and the endpoint answers 200 with every metric UNOBSERVED.
+     *
+     * <p>Same argument as {@link #rejectIllFormed}: accepting input the service
+     * cannot faithfully serve, and reporting success for it, is the failure
+     * this module exists to prevent. Refusing at ingest is the only point where
+     * the producer can still act on it.
+     *
+     * <p>Not covered by ADR 0003, which governs implausible <em>values</em> --
+     * those are quarantined and counted because dropping them would lose a real
+     * deployment. A name that cannot be addressed is not an implausible value;
+     * there is no coherent report to preserve.
+     */
+    private static void rejectUnaddressable(String service) {
+        if (service != null && service.indexOf('/') >= 0) {
+            throw new IllegalArgumentException(
+                    "service name contains '/', which cannot be addressed as a path segment: "
+                            + "the events would be stored and the report permanently unreadable");
         }
     }
 

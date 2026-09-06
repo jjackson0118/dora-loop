@@ -22,6 +22,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.lang.reflect.Method;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Connection;
@@ -1598,6 +1600,73 @@ class ApiIntegrationTest {
     // resolve guard deleted, and again with the loser's re-read forced to
     // DUPLICATE, the tests above fail and all three of the deleted tests
     // PASSED.
+
+    // --- addressing a service by name ---------------------------------------
+
+    /**
+     * A service whose name needs percent-encoding is readable.
+     *
+     * <p>Measured before the fix: the row was written, and the report came back
+     * 200 with every metric UNOBSERVED and the service echoed as
+     * {@code sp%20ace-...}. The lookup was for the encoded literal, which
+     * matches nothing. That is not "no data" -- the data is in the table, and
+     * the endpoint reported a clean absence of it.
+     *
+     * <p>All 39 other call sites here use {@code svc()}, which is
+     * {@code "it-" + UUID} and never needs encoding, so the suite could not see
+     * it. Three shapes are checked rather than one, because they fail
+     * differently: a space is the ordinary case, {@code +} is the one a
+     * form-decoder would silently turn into a space, and a non-ASCII character
+     * is the one that only works if the decode is UTF-8 aware.
+     */
+    @Test
+    void aServiceNameNeedingEncodingIsReadable() {
+        for (String name : List.of("sp ace-" + UUID.randomUUID(),
+                                   "pl+us-" + UUID.randomUUID(),
+                                   "caf\u00e9-" + UUID.randomUUID())) {
+            Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+            assertThat(postDeployment(id(), name, "production", deployedAt, "SUCCESS", """
+                        {"commitSha":"aaa","authoredAt":"%s"}
+                    """.formatted(deployedAt.minus(2, ChronoUnit.HOURS)))
+                    .getStatusCode()).as(name).isEqualTo(HttpStatus.CREATED);
+
+            String encoded = URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
+            ResponseEntity<String> res = http.getForEntity(
+                    "/api/v1/services/" + encoded + "/report?window=P30D", String.class);
+            assertThat(res.getStatusCode()).as(name).isEqualTo(HttpStatus.OK);
+
+            JsonNode report = parse(res.getBody());
+            assertThat(report.get("service").asText())
+                    .as("the report names the service that was asked for, decoded")
+                    .isEqualTo(name);
+            assertThat(metric(report, "deployment_frequency").get("observedN").asInt())
+                    .as("%s: the deployment is in the table and must be in the report", name)
+                    .isEqualTo(1);
+        }
+    }
+
+    /**
+     * A service name carrying a slash is refused at ingest rather than stored
+     * and then unreadable.
+     *
+     * <p>A {@code /} cannot survive a path segment: it either splits the path
+     * or, encoded, arrives as a literal matching no row. Storing the events and
+     * answering UNOBSERVED forever is the worse of the two options, and the
+     * producer is the only party who can still fix it.
+     */
+    @Test
+    void aServiceNameWithASlashIsRefused() {
+        Instant deployedAt = Instant.now().minus(1, ChronoUnit.HOURS);
+        ResponseEntity<String> res = postDeployment(
+                id(), "team/payments", "production", deployedAt, "SUCCESS", "");
+        assertThat(res.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(res.getBody()).contains("path segment");
+
+        assertThat(db.sql("SELECT count(*) FROM deployment_event WHERE service LIKE 'team/%'")
+                .query(Integer.class).single())
+                .as("refused means not stored")
+                .isZero();
+    }
 
     // --- the window --------------------------------------------------------
 
