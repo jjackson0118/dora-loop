@@ -6,6 +6,7 @@
 - [Authentication and exposure](Authentication-And-Exposure.md)
 - [Replays and corrections](Replays-And-Corrections.md)
 - [Layout and design](Layout-And-Design.md)
+- [Deployment](Deployment.md)
 
 ---
 
