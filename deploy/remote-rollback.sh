@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Return the service to a previous release. Runs ON the deploy target.
 #
-#   bash -s -- <previous-release-dir>
+#   bash -s -- <previous-release-dir> [--force]
 #
 # The previous release is passed in rather than discovered, because it was
 # recorded BEFORE the deploy that is now being undone. Discovering it here
@@ -16,8 +16,10 @@
 set -euo pipefail
 
 PREVIOUS="${1:?previous release directory required}"
+FORCE="${2:-}"
 
 APP_DIR=/opt/dora-loop
+LOCK="$APP_DIR/.deploy.lock"
 SETTLE=60
 
 say() { printf '   %s\n' "$1"; }
@@ -25,6 +27,26 @@ die() { printf 'ROLLBACK FAILED: %s\n' "$1" >&2; exit 1; }
 
 [ -d "$PREVIOUS" ]           || die "no such release: $PREVIOUS"
 [ -f "$PREVIOUS/app.jar" ]   || die "$PREVIOUS has no app.jar"
+
+# Wait, where a deploy fails fast. A rollback that arrives while a deploy is
+# thirty seconds from finishing should queue behind it rather than fight it;
+# the deploy is the deferrable operation, the rollback is not.
+#
+# It does NOT preempt automatically. Breaking a flock means killing whoever
+# holds it, which re-creates the two-writer condition this is here to remove.
+# --force proceeds without the lock and says so loudly: emergency authority is
+# a decision a person makes, not a default a script takes.
+exec 9>"$LOCK"
+if ! flock -w 90 9; then
+    holder=$(cat "$LOCK" 2>/dev/null || echo 'holder unknown')
+    if [ "$FORCE" = "--force" ]; then
+        printf 'WARNING: proceeding WITHOUT the lock; a deploy may be in flight: %s\n' "$holder" >&2
+    else
+        die "a deploy holds the lock after 90s: $holder (pass --force to override, deliberately)"
+    fi
+else
+    printf 'rollback to %s by %s since %s\n' "$(basename "$PREVIOUS")" "$(id -un)" "$(date -Is)" >&9
+fi
 
 FROM=$(readlink "$APP_DIR/current" 2>/dev/null || echo '<none>')
 say "rolling back from $FROM to $PREVIOUS"
@@ -48,6 +70,11 @@ ln -sfn "$PREVIOUS" "$APP_DIR/current"
 # that code is none of it.
 RELEASE_ID=$(basename "$PREVIOUS")
 
+# If the release being rolled away from tripped the start limit, the unit is in
+# `failed` and `systemctl restart` answers "start request repeated too quickly".
+# Clearing the counter first is the difference between a rollback that works on
+# a host that is already down and one that does not.
+sudo -n systemctl reset-failed dora-loop 2>/dev/null || true
 sudo -n systemctl restart dora-loop
 say "restarted"
 
@@ -67,5 +94,11 @@ case "$info" in
     *"$RELEASE_ID"*) say "serving $RELEASE_ID" ;;
     *) die "rolled back to $RELEASE_ID but the service reports: ${info:-<no answer>}" ;;
 esac
+
+# The release we just restored is, by demonstration, good: it serves. Advancing
+# last-good here means a subsequent deploy rolls back to this rather than to the
+# release that was withdrawn.
+ln -sfn "$PREVIOUS" "$APP_DIR/.last-good.$$"
+mv -Tf "$APP_DIR/.last-good.$$" "$APP_DIR/last-good"
 
 printf 'ROLLBACK OK now serving %s (was %s)\n' "$RELEASE_ID" "$FROM"

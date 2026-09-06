@@ -64,10 +64,32 @@ val buildSha: String =
 
 springBoot {
     buildInfo {
+        // excludes, not properties { time = null }. Setting the property to
+        // null compiled and did nothing -- the plugin read it as "use the
+        // default" and stamped the build time anyway, which two clean builds
+        // then proved by producing different jars. Verified by diffing the
+        // extracted archives: build-info.properties was the only file that
+        // differed, and build.time was the only line in it.
+        excludes.set(setOf("time"))
         properties {
             additional.put("sha", buildSha)
         }
     }
+}
+
+// Reproducible archives. Removing build.time was necessary and not sufficient:
+// a jar is a zip, and Gradle stamps each entry with the file's mtime and walks
+// the tree in filesystem order, so two clean builds of the same commit still
+// produced different sha256s -- measured, twice.
+//
+// This matters because the deploy verifies the artifact by sha256 and the whole
+// point of that check is to answer "is the thing running the thing we built".
+// If "the artifact for this commit" is not a stable object, the checksum
+// verifies only that a file survived a network transfer, which is the weaker
+// half of what it appears to promise.
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
