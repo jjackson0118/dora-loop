@@ -8,8 +8,8 @@
 # a target during development, so the logic is testable independently of the
 # transport.
 #
-# It takes no secrets. The ingest token is written to app.env by a prior step
-# that streams it over stdin; this script only verifies that step landed.
+# It takes no secrets. Operator bootstrap or token rotation populates app.env
+# on the target; releases preserve it and verify the ingest token is present.
 #
 # WHAT IT DELIBERATELY DOES NOT DO: revert on failure. An earlier design used a
 # bash trap to re-point the symlink if anything after the flip went wrong. Three
@@ -57,9 +57,9 @@ actual=$(sha256sum "$RELEASE_DIR/app.jar" | cut -d' ' -f1)
 [ "$actual" = "$EXPECT_SHA256" ] || die "jar checksum mismatch: expected $EXPECT_SHA256, got $actual"
 say "jar verified ($actual)"
 
-# app.env is written by the caller streaming the token over stdin. If that
-# failed the service starts and refuses every write with 503 while readiness
-# reports 200 -- which no probe in this script would otherwise catch.
+# app.env must already contain the operator-provisioned token. If it is absent,
+# the service starts and refuses every write with 503 while readiness reports
+# 200 -- which no probe in this script would otherwise catch.
 #
 # It no longer checks a build identity here, because there is no longer one to
 # check: the sha is stamped into the artifact and read from

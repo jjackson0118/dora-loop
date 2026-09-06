@@ -33,9 +33,15 @@ before the change rather than improvised after it.
 
 `dora` runs the service: a system account with no home and no login shell, which
 owns nothing it does not need. `deploy` ships releases and is the only account
-CI authenticates as, so what it may do is the blast radius of a compromised
-pipeline. It gets three `systemctl` verbs against one unit — not `systemctl *`,
-which would include `edit` and therefore arbitrary root execution.
+CI authenticates as. Its sudoers entry grants six `systemctl` verbs against
+`dora-loop`: `restart`, `stop`, `start`, `is-active`, `show` (with arguments),
+and `reset-failed`. It does not grant `systemctl edit` or arbitrary root commands.
+
+That limits direct administrative access, but deployed code is trusted as the
+application. The `deploy` account can replace the jar and restart it as `dora`.
+That code receives the ingest token and database credentials through systemd,
+and can access the service database with the application's privileges. Protecting
+`db.env` from a direct read by `deploy` does not remove this indirect access.
 
 The unit is hardened in the ordinary ways (`NoNewPrivileges`, `ProtectSystem=strict`,
 an empty `CapabilityBoundingSet`, a syscall filter). Two choices are less
@@ -66,10 +72,12 @@ Two environment files, on purpose.
 The database password is generated on the host and never transmitted. The
 application and the database share a machine and speak over loopback, so it does
 not need to exist anywhere else — and a secret that exists in one place cannot
-drift between two. CI never learns it.
+drift between two. The normal deployment flow does not transmit it to CI.
 
-Splitting the files means a deploy cannot clobber the database credential, and
-rotating the database credential does not require a release.
+The release scripts preserve both files. The `deploy` account cannot directly
+rewrite `db.env`, and rotating the database credential does not require a release.
+These file permissions do not restrict what a deployed application can do with
+the database credential it receives.
 
 `app.env` is created empty at provision time so the unit can start before any
 deploy has happened. Empty is safe: with no `DORA_INGEST_TOKEN` the service
@@ -132,8 +140,12 @@ test runs on the target against its consumer-facing bridge listener. This verifi
 that listener and product behavior; it does not establish reachability from the
 consumer's machine.
 
-Combined with the `deploy` account's three `systemctl` verbs, that policy is the
-complete blast radius of a compromised pipeline.
+The tailnet policy restricts the CI node's direct network access, and sudoers
+restricts the deploy account's direct root commands. Neither is a complete
+containment boundary for a compromised pipeline: it can deploy application code
+that runs as `dora`, reads the configured service credentials, and accesses the
+database. The systemd unit does not impose an outbound network allowlist on that
+code. Review and control of deployable changes remain part of the trust model.
 
 ## Deploy, smoke, rollback
 

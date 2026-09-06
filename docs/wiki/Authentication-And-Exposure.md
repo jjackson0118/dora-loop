@@ -43,6 +43,14 @@ calling it done would have been this project's own failure — a control that
 reads as coverage without being one. `ActuatorExposureTest` sets
 `exposure.include=*` and asserts the endpoints stay gone.
 
+The deployment pipeline is also trusted to supply application code. The
+`deploy` account can replace the jar and restart it as `dora`; the resulting
+process receives the ingest token and database credentials and can access the
+database directly, bypassing HTTP authentication and ingestion validation.
+Restricted sudo commands, file permissions, and CI network access reduce direct
+access but do not remove that application-level trust. See
+[Deployment](Deployment.md) for the account and network boundaries.
+
 What this is **not**: it is one shared secret, with no rotation, no expiry, no
 per-producer identity and no rate limiting, so anyone holding it can write
 anything and nothing distinguishes one holder from another. That is a

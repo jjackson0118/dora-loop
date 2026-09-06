@@ -32,10 +32,10 @@ Type=exec
 User=dora
 Group=dora
 
-# Two files, on purpose. db.env is generated once at provision time and never
-# touched by a deploy; app.env is rewritten on every release. A deploy
-# therefore cannot clobber the database credential, and rotating the database
-# credential does not require a release.
+# Two files, on purpose. Provisioning generates db.env; operator bootstrap or
+# token rotation populates app.env. Release scripts preserve both files. Build
+# identity lives in the jar. The running application receives both sets of
+# credentials, so deployed code is trusted with database access.
 EnvironmentFile=/etc/dora-loop/db.env
 EnvironmentFile=/etc/dora-loop/app.env
 
