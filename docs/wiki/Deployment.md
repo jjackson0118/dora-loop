@@ -133,3 +133,61 @@ no user goes through proves the wrong thing.
 
 Combined with the `deploy` account's three `systemctl` verbs, that policy is the
 complete blast radius of a compromised pipeline.
+
+## Deploy, smoke, rollback
+
+Three scripts in `deploy/`, plus the `smoke` gate from
+[delivery-gates](https://github.com/jjackson0118/delivery-gates). The remote
+halves are separate files rather than strings built by the caller, so they are
+covered by the shellcheck gate and can be run directly against a target during
+development — the logic is testable independently of the transport.
+
+**`remote-release.sh`** activates a release, and refuses to activate one it
+cannot vouch for. It verifies the jar's sha256 (a truncated transfer is a file
+that exists, looks plausible, and fails at class-load time minutes later,
+looking like a code problem); it verifies that `app.env` already carries this
+release's identity, so a deploy whose environment step failed stops *before*
+flipping the symlink rather than after; and once restarted it reads back both
+the symlink and `/actuator/info` and fails if either disagrees with what was
+deployed.
+
+That read-back is the whole point. `ln` reports success for a link nobody
+follows, and `systemctl` reports success for a unit that starts and then serves
+the wrong thing — which is exactly what a rehearsal produced before these
+checks existed.
+
+**`decide.sh`** reads the smoke gate's JSON report and decides. It reads the
+report rather than the CI step's status because `run-gate.sh` maps both exit 1
+and exit 2 to failure for the orchestrator: an orchestrator has two states and
+the contract has four, so by the time a workflow step has a status, the
+distinction this decision turns on has already been thrown away.
+
+| smoke | decision | why |
+|---|---|---|
+| 0 | keep, `VERIFIED` | it served, and served what we shipped |
+| 1 | **roll back** | it answered, and the answer was wrong |
+| 2 | keep, `UNVERIFIED`, fail the job | nobody found out |
+| 3 | keep, `UNVERIFIED`, fail the job | not-applicable after a deploy means `SMOKE_URL` is unset |
+| no report | keep, `UNVERIFIED`, fail the job | a gate that produced no evidence has told us nothing |
+
+The exit-2 row is the arguable one. Rolling back on "could not measure" means a
+missing `curl` or a DNS blip reverts a healthy release — an automated outage
+caused by the machinery meant to prevent outages. And an unmeasured deploy is
+not evidence of a defect, so recording one would inflate change failure rate
+with a failure that never happened. So the release stays, the record says
+`UNVERIFIED`, and the job fails loudly for a person. Something is deployed,
+nobody checked it, and the record says exactly that instead of guessing in
+either direction.
+
+**`remote-rollback.sh`** takes the previous release as an argument rather than
+discovering it, because it was recorded before the deploy that is now being
+undone — during an incident is the worst moment to start working out where to
+go back to. It re-points a symlink and restarts: no fetching, no rebuilding, so
+it works when the network is down, when the registry is down, and when the
+build that produced the current release is no longer reproducible. That is why
+releases are kept side by side.
+
+It also restores the build identity in `app.env`. Without that, a rolled-back
+service would keep reporting the release it had just backed away from, and an
+operator checking whether the rollback worked would be told it had not.
+
