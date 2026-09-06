@@ -17,3 +17,16 @@ jobs:
     with:
       java-version: "21"
       gates-ref: main
+
+  # The deploy scripts are shell, so the JVM pipeline above does not test them.
+  # decide.sh is the control that decides whether a bad release is withdrawn,
+  # and a reviewer got a previous version to answer "keep, verified" for a
+  # report ordering a rollback -- so its corpus runs here rather than living in
+  # a directory nothing executes.
+  deploy-scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: decide.sh reads the smoke report faithfully
+        run: ./deploy/decide-test.sh
+
