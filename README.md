@@ -58,12 +58,14 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 2. [Lead time is measured per change, not per deployment](docs/adr/0002-lead-time-is-per-change.md)
 3. [Implausible input is quarantined and surfaced, not rejected](docs/adr/0003-suspect-input-is-a-signal.md)
 4. [Thresholds are a per-service value, not compiled-in constants](docs/adr/0004-thresholds-are-configurable.md)
+5. [Verification is independent deployment evidence](docs/adr/0005-verification-is-independent-evidence.md)
 
 ## Roadmap
 
 - Have the working deploy pipeline post its own `DeploymentEvent` back here.
   **Event reporting is not built yet**, so the measurement loop remains open.
-  Add the orthogonal verification field so inconclusive checks remain explicit.
+  The orthogonal `verification` field is implemented: missing evidence defaults
+  to `UNVERIFIED` and is counted in `data_quality.unverified_deployments`.
 - Bounding the report query, which currently loads a service's whole history
   and windows it in memory.
 

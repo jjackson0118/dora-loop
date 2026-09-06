@@ -75,7 +75,8 @@ public final class DoraCalculator {
                 changeFailureRate(prodDeploys, serviceIncidents),
                 timeToRestore(windowIncidents),
                 suspectChanges(prodDeploys),
-                suspectIncidents(windowIncidents));
+                suspectIncidents(windowIncidents),
+                unverifiedDeployments(prodDeploys));
     }
 
     private Metric deploymentFrequency(List<DeploymentEvent> prodDeploys) {
@@ -251,6 +252,20 @@ public final class DoraCalculator {
         long suspect = incidents.stream().filter(i -> !i.isPlausible()).count();
         return Metric.observed(name, (double) suspect, unit, incidents.size(),
                 suspect > thresholds.suspectMax(), wrong);
+    }
+
+    /** Counts missing deployment evidence without changing any DORA formula. */
+    private Metric unverifiedDeployments(List<DeploymentEvent> deployments) {
+        String name = "data_quality.unverified_deployments";
+        String unit = "deployments";
+        String wrong = "> 0 " + unit;
+        if (deployments.isEmpty()) {
+            return Metric.unobserved(name, unit, wrong);
+        }
+        long unverified = deployments.stream()
+                .filter(d -> d.verification() == Verification.UNVERIFIED).count();
+        return Metric.observed(name, (double) unverified, unit, deployments.size(),
+                unverified > 0, wrong);
     }
 
     /** Half-open: {@code [start, end)}. Closed would double-count at window boundaries. */

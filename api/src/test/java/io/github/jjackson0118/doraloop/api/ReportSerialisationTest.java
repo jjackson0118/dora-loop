@@ -71,9 +71,9 @@ class ReportSerialisationTest {
         ReportDtos.ReportDto r = emptyReport();
 
         assertThat(r.metrics()).hasSize(4);
-        assertThat(r.dataQuality()).hasSize(2);
+        assertThat(r.dataQuality()).hasSize(3);
         assertThat(r.dataQuality()).allSatisfy(
                 m -> assertThat(m.name()).startsWith("data_quality."));
-        assertThat(r.summary().unobserved()).hasSize(6);
+        assertThat(r.summary().unobserved()).hasSize(7);
     }
 }

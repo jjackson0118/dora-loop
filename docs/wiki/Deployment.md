@@ -256,5 +256,7 @@ injecting defects into the live VM. This successful live run demonstrates the
 happy path; it does not claim a live CI rollback rehearsal or external-user
 reachability. Smoke runs on the target against its configured bridge listener.
 
-Event reporting and its orthogonal verification field remain separate work.
+Event reporting remains separate work. The API now accepts orthogonal
+`verification` evidence and conservatively defaults omitted values to
+`UNVERIFIED`; see [Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections).
 The service is deployed; the pipeline does not yet post its own deployment events.

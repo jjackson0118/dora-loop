@@ -15,7 +15,8 @@ public record DoraReport(
         Metric changeFailureRate,
         Metric timeToRestore,
         Metric suspectChanges,
-        Metric suspectIncidents
+        Metric suspectIncidents,
+        Metric unverifiedDeployments
 ) {
     public DoraReport {
         Objects.requireNonNull(service, "service");
@@ -27,6 +28,7 @@ public record DoraReport(
         Objects.requireNonNull(timeToRestore, "timeToRestore");
         Objects.requireNonNull(suspectChanges, "suspectChanges");
         Objects.requireNonNull(suspectIncidents, "suspectIncidents");
+        Objects.requireNonNull(unverifiedDeployments, "unverifiedDeployments");
     }
 
     /** The four DORA metrics. */
@@ -35,7 +37,7 @@ public record DoraReport(
     }
 
     /**
-     * The four metrics plus the data-quality signal.
+     * The four metrics plus the data-quality signals.
      *
      * <p>{@code suspectChanges} is not a DORA metric, but it governs whether the
      * DORA metrics can be believed. Ingest quality that is not itself a signal
@@ -45,6 +47,7 @@ public record DoraReport(
         List<Metric> all = new java.util.ArrayList<>(metrics());
         all.add(suspectChanges);
         all.add(suspectIncidents);
+        all.add(unverifiedDeployments);
         return List.copyOf(all);
     }
 
