@@ -61,12 +61,21 @@ fi
 # radius of a compromised pipeline. It gets three systemctl verbs against one
 # unit and nothing else -- not `systemctl *`, which would include `edit` and
 # therefore arbitrary root execution.
+# reset-failed is granted alongside the start limit being MOVED to [Unit], and
+# the two must ship together. Fixing the placement alone arms a trap: after
+# five failures the unit enters `failed`, `systemctl restart` answers "start
+# request repeated too quickly", and without reset-failed this account can
+# neither clear the counter nor daemon-reload -- so rollback fails on a host
+# that is already down, at the worst possible moment. Granting it is safe: it
+# clears a counter and executes nothing.
 cat > /etc/sudoers.d/dora-loop <<SUDOERS
-$DEPLOY_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart dora-loop, /usr/bin/systemctl stop dora-loop, /usr/bin/systemctl start dora-loop, /usr/bin/systemctl is-active dora-loop, /usr/bin/systemctl show dora-loop *
+$DEPLOY_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart dora-loop, /usr/bin/systemctl stop dora-loop, /usr/bin/systemctl start dora-loop, /usr/bin/systemctl is-active dora-loop, /usr/bin/systemctl show dora-loop *, /usr/bin/systemctl reset-failed dora-loop
 SUDOERS
 chmod 0440 /etc/sudoers.d/dora-loop
 visudo -cf /etc/sudoers.d/dora-loop >/dev/null
-did "sudoers: three systemctl verbs on dora-loop, nothing else"
+# Six, counted rather than remembered. It said "three" while granting five, in
+# this line and in the wiki, from the day it was written.
+did "sudoers: six systemctl verbs on dora-loop, nothing else"
 
 step "directories"
 # Releases are kept side by side and a symlink chooses one. Rollback is then a
@@ -183,6 +192,11 @@ check "deploy edits the unit"        deny  "sudo -n systemctl edit --force dora-
 check "deploy touches postgresql"    deny  "sudo -n systemctl restart postgresql"
 check "deploy reloads systemd"       deny  "sudo -n systemctl daemon-reload"
 check "deploy restarts dora-loop"    allow "sudo -n systemctl is-active dora-loop || true"
+check "deploy clears a start limit"  allow "sudo -n systemctl reset-failed dora-loop"
+# The unit's restart limiter has to be real, not merely present. It sat in
+# [Service] where systemd ignores the interval, so the limiter never engaged.
+check "start limit is in effect"     allow \
+    "systemctl show dora-loop --property=StartLimitIntervalUSec --value | grep -qx 5min"
 
 if [ "$fails" -gt 0 ]; then
     printf '\n   %s postcondition(s) failed; this host is not correctly provisioned\n' "$fails" >&2

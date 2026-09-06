@@ -9,6 +9,24 @@ Documentation=https://github.com/jjackson0118/dora-loop
 After=network-online.target postgresql.service
 Wants=network-online.target postgresql.service
 
+# Five failures in five minutes stops the restarts. Without this, a service
+# that cannot start -- bad config, missing token, unreachable database --
+# restart-loops indefinitely while looking supervised. The contract library in
+# delivery-gates has exit 3 for exactly this confusion: "not applicable" and
+# "unhealthy" are different, and a supervisor that cannot tell them apart
+# restarts a service nine times overnight for no reason.
+#
+# IN [Unit], NOT [Service]. They were in [Service], where systemd does not
+# accept StartLimitIntervalSec -- `systemd-analyze verify` reports "Unknown key
+# name ... ignoring" and the effective interval fell back to the 10s default.
+# With RestartSec=5s five starts span at least 20s, so the limiter could never
+# trip: a broken release reached 18 restarts and was still looping. The exact
+# behaviour these two lines claimed to prevent was the behaviour the unit had,
+# and the claim sat in this file and in the wiki for as long as the unit
+# existed. Found by a reviewer running systemd-analyze, not by reading.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
 [Service]
 Type=exec
 User=dora
@@ -36,14 +54,6 @@ TimeoutStopSec=45
 
 Restart=on-failure
 RestartSec=5s
-# Five failures in five minutes stops the restarts. Without this, a service
-# that cannot start -- bad config, missing token, unreachable database --
-# restart-loops indefinitely while looking supervised. The contract library in
-# delivery-gates has exit 3 for exactly this confusion: "not applicable" and
-# "unhealthy" are different, and a supervisor that cannot tell them apart
-# restarts a service nine times overnight for no reason.
-StartLimitIntervalSec=300
-StartLimitBurst=5
 
 # --- hardening ---------------------------------------------------------------
 # This process reads a jar and talks to loopback Postgres. It has no reason to
