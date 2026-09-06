@@ -14,6 +14,7 @@ bundle=$(mktemp -d)
 trap 'rm -rf -- "$bundle"' EXIT
 cp "$JAR" "$bundle/app.jar"
 cp -R deploy "$bundle/deploy"
+python3 deploy/event_context.py "$bundle"
 mkdir "$bundle/gates"
 cp -R "$GATES/gates" "$GATES/lib" "$bundle/gates/"
 checksum=$(sha256sum "$bundle/app.jar" | cut -d' ' -f1)
@@ -26,10 +27,10 @@ tailscale ssh "deploy@$TARGET" "cd '$remote' && bash deploy/remote-orchestrate.s
 # Preserve evidence even on a failing decision. A transport failure retrieving
 # evidence cannot turn a failed deploy green; a successful deploy becomes unknown.
 mkdir -p deploy-evidence
-tailscale ssh "deploy@$TARGET" "tar -cf - -C '$remote' --ignore-failed-read previous started decision reports" |
+tailscale ssh "deploy@$TARGET" "tar -cf - -C '$remote' --ignore-failed-read previous started decision reports history.json event-context.json event-draft.json event-status event.json event-receipt.json" |
     tar -xf - -C deploy-evidence || { [ "$rc" -ne 0 ] || rc=2; }
 if [ "$rc" -eq 0 ]; then
-    for file in previous started decision reports/smoke.json; do
+    for file in previous started decision reports/smoke.json history.json event-context.json event.json event-receipt.json; do
         [ -s "deploy-evidence/$file" ] || rc=2
     done
 fi

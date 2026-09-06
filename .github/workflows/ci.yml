@@ -18,6 +18,7 @@ jobs:
       - run: bash deploy/decide-test.sh
       - run: bash deploy/orchestrate-test.sh
       - run: bash deploy/ci-deploy-test.sh
+      - run: python3 -m unittest discover -s deploy -p '*_test.py'
   deploy:
     needs: [pipeline, deploy-scripts]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -31,6 +32,8 @@ jobs:
       SMOKE_URL: ${{ vars.SMOKE_URL }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jjackson0118/delivery-gates

@@ -20,6 +20,9 @@ PREVIOUS=$(readlink "$APP_DIR/last-good" || true)
 printf '%s\n' "$PREVIOUS" > previous
 START=$(date +%s)
 printf '%s\n' "$START" > started
+# Validate the complete change range before any activation. This draft is not
+# an event: no observed deployment outcome exists yet.
+python3 deploy/prepare_event.py "$RELEASE_ID" || exit 2
 [ "$(sha256sum app.jar | cut -d' ' -f1)" = "$EXPECT_SHA256" ] || exit 2
 # Fully receive and checksum before publishing. A same-SHA rebuild differing in
 # bytes is rejected rather than overwriting a release used by rollback.
@@ -38,9 +41,19 @@ rollback() {
     # Guard checked again under rollback's lock: never undo a peer's release.
     bash deploy/remote-rollback.sh "$PREVIOUS" "" "$RELEASE_DIR"
 }
+report() {
+    python3 deploy/finalize_event.py "$1" "$2" || return 2
+    if python3 deploy/report_event.py event.json event-receipt.json; then
+        echo 'ACKNOWLEDGED: final event accepted by ingest' > event-status
+    else
+        echo 'DELIVERY_FAILED: replay event.json unchanged; receipt absent' > event-status
+        return 2
+    fi
+}
 activation=0
 bash deploy/remote-release.sh "$RELEASE_ID" "$EXPECT_SHA256" "$PREVIOUS" || activation=$?
 if [ "$activation" -ne 0 ]; then
+    echo 'OUTCOME_UNKNOWN: activation failed; no deployment event submitted' > event-status
     echo 'activation failed; recovering only if candidate owns current' >&2
     if [ "$(readlink "$APP_DIR/current" || true)" = "$RELEASE_DIR" ]; then rollback; fi
     exit 1
@@ -55,11 +68,20 @@ bash deploy/decide.sh "$GATE_REPORT_DIR/smoke.json" "$START" > decision || decis
 if [ "$smoke" -ne "$decision" ]; then
     echo 'decision=KEEP_UNVERIFIED reason=smoke-process-report-disagreement verification=UNVERIFIED' > decision
     cat decision
+    report SUCCESS UNVERIFIED || true
     exit 2
 fi
 cat decision
 case "$decision" in
-    0) exit 0 ;;
-    1) rollback; exit 1 ;;
-    *) exit 2 ;;
+    0) report SUCCESS VERIFIED; exit 0 ;;
+    1)
+        if rollback; then
+            report ROLLED_BACK VERIFIED || exit 2
+            exit 1
+        else
+            rollback_rc=$?
+            echo 'OUTCOME_UNKNOWN: rollback failed; no deployment event submitted' > event-status
+            exit "$rollback_rc"
+        fi ;;
+    *) report SUCCESS UNVERIFIED || true; exit 2 ;;
 esac

@@ -17,3 +17,6 @@ backups/
 # run against checked-in artifacts and report five gates checked with no run
 # having happened. delivery-gates gitignores this directory for the same reason.
 .gate-reports/
+
+# Python deployment helper bytecode.
+__pycache__/

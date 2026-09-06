@@ -8,6 +8,7 @@ import io
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 
@@ -30,10 +31,14 @@ elif 'tar -cf' in command:
     if case == 'evidence-transport-failed': sys.exit(255)
     files = {'previous': '/opt/dora-loop/releases/abc\n', 'started': '12345\n',
              'decision': 'decision=KEEP verification=VERIFIED\n',
-             'reports/smoke.json': '{"gate":"smoke","exit_code":0}\n'}
+             'reports/smoke.json': '{"gate":"smoke","exit_code":0}\n',
+             'history.json': '[]', 'event-context.json': '{}', 'event.json': '{}',
+             'event-receipt.json': '{}'}
     if case == 'empty-evidence': files = {}
     if case == 'missing-report': del files['reports/smoke.json']
     if case == 'empty-decision': files['decision'] = ''
+    if case == 'missing-receipt': del files['event-receipt.json']
+    if case == 'missing-event': del files['event.json']
     with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as tar:
         for name, text in files.items():
             data = text.encode()
@@ -45,13 +50,19 @@ else:
 '''
 cases = {'success': 0, 'upload-failed': 1, 'remote-failed': 1,
          'remote-unverified': 2, 'ssh-lost': 255, 'evidence-transport-failed': 2,
-         'empty-evidence': 2, 'missing-report': 2, 'empty-decision': 2}
+         'empty-evidence': 2, 'missing-report': 2, 'empty-decision': 2,
+         'missing-receipt': 2, 'missing-event': 2}
 with tempfile.TemporaryDirectory(prefix='dora-transport-test-') as directory:
     root = Path(directory)
     for case, expected in cases.items():
         work = root / case
         (work / 'bin').mkdir(parents=True)
         (work / 'deploy').mkdir()
+        shutil.copy(adapter.parent/'event_context.py', work/'deploy/event_context.py')
+        subprocess.run(['git','init','-q'],cwd=work,check=True)
+        subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.test',
+                        'commit','--allow-empty','-qm','fixture'],cwd=work,check=True)
+        sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=work,text=True).strip()
         (work / 'gates/gates').mkdir(parents=True)
         (work / 'gates/lib').mkdir()
         (work / 'app.jar').write_bytes(b'fixture artifact')
@@ -61,7 +72,8 @@ with tempfile.TemporaryDirectory(prefix='dora-transport-test-') as directory:
         log = work / 'calls'
         env = dict(os.environ, PATH=str(work/'bin')+os.pathsep+os.environ['PATH'],
                    CASE=case, CALL_LOG=str(log), DEPLOY_HOST='fixture.example',
-                   SMOKE_URL='http://192.0.2.1:8080', GITHUB_SHA='a'*40)
+                   SMOKE_URL='http://192.0.2.1:8080', GITHUB_SHA=sha, GITHUB_RUN_ID='1', GITHUB_RUN_ATTEMPT='1',
+                   GITHUB_REPOSITORY='fixture/project')
         run = subprocess.run(['bash', str(adapter), 'app.jar', 'gates'], cwd=work,
                              env=env, capture_output=True, text=True, timeout=20)
         assert run.returncode == expected, (case, run.returncode, expected, run.stdout, run.stderr)
