@@ -29,7 +29,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * been shown one character in one field, and a repository guard unreachable
  * from every route the HTTP tests take.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "dora.ingest.token=ingestgaptest-secret")
 @Testcontainers
 class IngestGapTest {
 
@@ -356,6 +357,7 @@ class IngestGapTest {
     private ResponseEntity<String> post(String path, String json) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set(IngestAuthFilter.HEADER, "ingestgaptest-secret");
         return http.postForEntity(path, new HttpEntity<>(json, headers), String.class);
     }
 }
