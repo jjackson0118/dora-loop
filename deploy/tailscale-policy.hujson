@@ -1,0 +1,54 @@
+// Tailnet policy fragment for the deploy path.
+//
+// NOT a complete policy file. These are the entries to MERGE into the existing
+// one in the Tailscale admin console. Replacing a policy wholesale is how
+// people lock themselves out of their own tailnet, and a deploy pipeline is not
+// worth that risk.
+//
+// The shape of what this authorises: a GitHub-hosted runner joins the tailnet
+// for the duration of one workflow run as an ephemeral node tagged tag:ci, SSHes
+// to the deploy target as the `deploy` user, ships a release, and disappears.
+// Nothing is exposed inbound from the internet at any point, and no long-lived
+// SSH private key exists to be stolen from GitHub secrets, because Tailscale SSH
+// authenticates by tailnet identity rather than by a key the repository holds.
+{
+  // Tags are identities that belong to the tailnet rather than to a person, so
+  // a machine keeps working when a human's session expires -- and, more to the
+  // point here, so the CI node's authority is described by what it is tagged
+  // rather than by whose account minted it.
+  "tagOwners": {
+    "tag:ci":            ["autogroup:admin"],
+    "tag:deploy-target": ["autogroup:admin"],
+  },
+
+  "acls": [
+    // Port 22 on one tag, from one tag. Not the VM's address -- an address is
+    // a fact about today's network and a tag is a statement about the machine's
+    // role, which is the thing that should survive a rebuild.
+    //
+    // Deliberately NOT opening 8080. CI has no reason to reach the application
+    // port: the smoke test runs ON the target, over loopback, because a smoke
+    // test that verifies a port the user never uses proves the wrong thing.
+    {
+      "action": "accept",
+      "src":    ["tag:ci"],
+      "dst":    ["tag:deploy-target:22"],
+    },
+  ],
+
+  // Tailscale SSH. The target runs `tailscale up --ssh`, so tailscaled answers
+  // these connections and the policy below is the whole authorisation decision.
+  //
+  // `users` is `deploy` and nothing else. Not root, and not autogroup:nonroot,
+  // which would permit every non-root account on the host. The deploy account's
+  // sudo is three systemctl verbs against one unit, so this line plus that
+  // sudoers file is the complete blast radius of a compromised pipeline.
+  "ssh": [
+    {
+      "action": "accept",
+      "src":    ["tag:ci"],
+      "dst":    ["tag:deploy-target"],
+      "users":  ["deploy"],
+    },
+  ],
+}

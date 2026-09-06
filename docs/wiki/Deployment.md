@@ -104,3 +104,32 @@ port, the connection is refused instantly, and readiness answered in 19ms with
 the defect restored. The test that carries the property instead points the
 datasource at an unrouted address, so packets are dropped rather than refused
 and the pool is forced to be the thing that gives up.
+
+## How CI reaches the target
+
+A GitHub-hosted runner cannot reach this VM: it sits on a private bridge behind
+another host, and nothing about it is exposed to the internet. The obvious fix —
+a self-hosted runner — is the wrong one here, because both repositories are
+**public**, and a self-hosted runner on a public repository puts an executor for
+repository-supplied code inside the network it can reach.
+
+So the runner comes to the tailnet instead. For the duration of one workflow run
+it joins as an ephemeral node tagged `tag:ci`, connects over Tailscale SSH to the
+node tagged `tag:deploy-target`, ships a release, and disappears. The policy
+fragment is in [`deploy/tailscale-policy.hujson`](https://github.com/jjackson0118/dora-loop/blob/main/deploy/tailscale-policy.hujson).
+
+Two properties are worth stating because they are the reason for the choice:
+
+**No SSH private key exists.** Tailscale SSH authorises by tailnet identity
+against the policy, so there is no long-lived key in GitHub secrets to leak,
+rotate, or forget to rotate. The credential CI holds is an OAuth client that
+mints a short-lived, tagged, ephemeral node and nothing else.
+
+**The grant is one tag to one tag on one port.** Not an address — an address is a
+fact about today's network, and a tag is a statement about the machine's role,
+which survives a rebuild. Port 8080 is deliberately not opened to CI: the smoke
+test runs on the target over loopback, because a smoke test that exercises a port
+no user goes through proves the wrong thing.
+
+Combined with the `deploy` account's three `systemctl` verbs, that policy is the
+complete blast radius of a compromised pipeline.
