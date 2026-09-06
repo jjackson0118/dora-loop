@@ -62,10 +62,12 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 
 ## Roadmap
 
-- Have the working deploy pipeline post its own `DeploymentEvent` back here.
-  **Event reporting is not built yet**, so the measurement loop remains open.
-  The orthogonal `verification` field is implemented: missing evidence defaults
-  to `UNVERIFIED` and is counted in `data_quality.unverified_deployments`.
+- Rehearse the newly implemented deployment-event reporting path in live CI.
+  The pipeline saves the full change range and observed outcome, posts it from
+  the target, and retains a replayable payload if delivery fails. The first
+  authenticated deployment-event rehearsal is still pending.
+  Missing verification evidence remains explicit in
+  `data_quality.unverified_deployments`.
 - Bounding the report query, which currently loads a service's whole history
   and windows it in memory.
 

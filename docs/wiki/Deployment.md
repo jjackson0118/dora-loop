@@ -256,7 +256,86 @@ injecting defects into the live VM. This successful live run demonstrates the
 happy path; it does not claim a live CI rollback rehearsal or external-user
 reachability. Smoke runs on the target against its configured bridge listener.
 
-Event reporting remains separate work. The API now accepts orthogonal
-`verification` evidence and conservatively defaults omitted values to
-`UNVERIFIED`; see [Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections).
-The service is deployed; the pipeline does not yet post its own deployment events.
+Deployment-event reporting is implemented as described below. Its first live
+CI rehearsal remains pending. The API accepts orthogonal `verification`
+evidence and conservatively defaults omitted values to `UNVERIFIED`; see
+[Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections).
+The service is deployed; automatic event reporting awaits its first live CI rehearsal.
+
+## Deployment-event reporting
+
+Events use `environment: production` to exercise the DORA production filters
+for this private demo service. This describes the demo's deployed environment;
+it is not a claim of enterprise production operation.
+
+The runner checks out full history (`fetch-depth: 0`) and captures the exact
+commit's ancestry and author timestamps before uploading the private bundle.
+The target resolves its captured `last-good` commit in that history and computes
+all commits reachable from the candidate but not from the baseline. This
+includes merged branch commits, not only the head or first-parent history.
+Missing, shallow, ambiguous or diverged history fails before activation; an
+empty change list is accepted only when the ancestry difference is truly empty.
+
+The event ID is `owner/repository:run:RUN_ID:attempt:ATTEMPT`, and `deployedAt`
+is the target's epoch captured before activation. HTTP retries reuse exactly
+the same payload and identity. A separate Actions attempt is a separate
+identity; it does not silently rewrite a previous run. A rerun whose candidate
+is already current remains refused by the existing ownership guard. Replay
+the retained event when delivery alone failed.
+
+| Observed deployment result | Event | CI result |
+|---|---|---|
+| Smoke process and fresh report both succeed | SUCCESS / VERIFIED | Green only after acknowledgment and evidence retrieval |
+| Smoke unavailable, malformed, stale, not applicable, or process/report disagreement | SUCCESS / UNVERIFIED | Fails visibly; candidate retained |
+| Demonstrated smoke defect and confirmed rollback | ROLLED_BACK / VERIFIED | Failed deployment, even if event delivery succeeds |
+| Ambiguous activation failure or failed rollback | No final event; context and status retained | Failed; reconcile outcome before reporting |
+| Final event delivery fails | Final payload retained unchanged, receipt absent | Failed; no additional rollback |
+
+SUCCESS / UNVERIFIED means the activated release was retained, not that smoke
+passed. The API's data-quality signal exposes this missing evidence. The
+workflow does not infer FAILED_ROLLOUT from an arbitrary nonzero exit: inability
+to establish what served is not proof the change never reached users.
+
+Before activation, `event-draft.json` is explicitly pending and must not be
+submitted as an observation. After the outcome is known, `event.json` is saved
+before POST. The target-local reporter reads the ingest token from the service's
+environment file without evaluating it as shell code. The token is never
+uploaded from the runner or copied to evidence. Redirects and ambient proxies
+are disabled so they cannot receive that credential.
+
+Delivery makes at most three attempts with five-second request timeouts and
+one-second delays, retrying transport loss and server errors with identical
+bytes. A 4xx, malformed acknowledgment, or wrong event ID fails rather than
+claiming success. A receipt requires the exact event ID plus 201/STORED or
+200/DUPLICATE or UPDATED. This includes honest failure when an older deployed
+binary rejects the verification field. Deploy the verification-capable service
+before enabling this workflow; an old binary must not silently receive a
+reduced payload with its evidence field discarded.
+
+### Evidence and replay
+
+The artifact retains `previous`, `started`, `decision`, smoke reports, Git
+history, `event-context.json`, pending draft, `event-status`, and—when known—
+`event.json` and `event-receipt.json`. Green CI requires the final payload and
+receipt in addition to the existing smoke evidence. The uploaded bundle stays
+on the target under the private temporary path printed by the runner.
+
+For delivery failure after a known result, an operator can rerun the reporter
+on that target, using the saved final payload without regenerating its ID,
+timestamp, changes or outcome:
+
+```bash
+cd "$BUNDLE"
+python3 deploy/report_event.py event.json event-receipt.json
+```
+
+`BUNDLE` is the retained directory from that run. Do not submit the pending
+draft. An OUTCOME_UNKNOWN status requires reconciling the actual deployment
+before constructing an event. A failed receipt write can follow a successful
+POST; replay is safe because the API recognizes the same event as DUPLICATE.
+
+Tests exercise real local HTTP lost-reply retries, duplicate acknowledgment,
+server failure, redirect refusal, wrong IDs and unsupported payloads. Isolated
+orchestration tests verify reporter failure retains a healthy release and that
+ambiguous activation/recovery never creates a final event. These are fixture
+proofs; authenticated CI rehearsal is tracked separately above.

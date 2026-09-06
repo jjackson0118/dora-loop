@@ -55,8 +55,9 @@ Non-obvious decisions are recorded as ADRs in the repository:
 
 CI deployment and smoke verification succeeded on a private VM on 2026-09-06;
 [Deployment](Deployment.md) records the run and independent build read-back.
-The loop the name refers to does not close yet: posting its own
-`DeploymentEvent` and representing unverified deployments remain separate work.
+The verification field is implemented, and automatic deployment-event reporting
+is wired with replayable failure evidence. The first authenticated run of event
+reporting is still pending; fixture tests do not substitute for that rehearsal.
 
 Nothing is published to the internet, deliberately. The report is readable
 without a token by design, and the service is reachable only on a private
