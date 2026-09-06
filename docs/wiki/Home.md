@@ -41,6 +41,9 @@ proves nothing.
   loses information in the direction that flatters the metrics.
 - **[Layout and design](Layout-And-Design.md)** — module boundaries, and the
   build invariants that keep them from eroding.
+- **[Deployment](Deployment.md)** — the target, why provisioning and deploying
+  are separate, where the secrets come from, and a readiness probe that used to
+  take thirty seconds to say no.
 
 Non-obvious decisions are recorded as ADRs in the repository:
 [0001 change failure rate](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0001-change-failure-rate-joins-incidents.md),

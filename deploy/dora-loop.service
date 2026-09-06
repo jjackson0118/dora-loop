@@ -1,0 +1,73 @@
+[Unit]
+Description=dora-loop
+Documentation=https://github.com/jjackson0118/dora-loop
+# Wants= rather than Requires=: the service must be able to start while
+# Postgres is down and report itself NOT ready, because that is the state the
+# readiness probe exists to describe. Requires= would take the unit down with
+# the database and leave nothing to answer the probe -- an outage that reports
+# nothing looks identical to a host that is simply gone.
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=exec
+User=dora
+Group=dora
+
+# Two files, on purpose. db.env is generated once at provision time and never
+# touched by a deploy; app.env is rewritten on every release. A deploy
+# therefore cannot clobber the database credential, and rotating the database
+# credential does not require a release.
+EnvironmentFile=/etc/dora-loop/db.env
+EnvironmentFile=/etc/dora-loop/app.env
+
+# 512m against 3.8G of RAM shared with Postgres. Deliberately small: a heap
+# limit that is never reached teaches you nothing, and this service should be
+# able to run on a machine the size of the one it measures.
+ExecStart=/usr/bin/java -Xmx512m -XX:+ExitOnOutOfMemoryError -jar /opt/dora-loop/current/app.jar
+
+# The application handles SIGTERM with a graceful shutdown, and its own config
+# allows 20s for in-flight work. Give systemd more than that so it is the
+# application's timeout that fires, not the supervisor's -- the deploy job
+# posts a DeploymentEvent, and a SIGKILL mid-POST loses the measurement this
+# project is named for.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+
+Restart=on-failure
+RestartSec=5s
+# Five failures in five minutes stops the restarts. Without this, a service
+# that cannot start -- bad config, missing token, unreachable database --
+# restart-loops indefinitely while looking supervised. The contract library in
+# delivery-gates has exit 3 for exactly this confusion: "not applicable" and
+# "unhealthy" are different, and a supervisor that cannot tell them apart
+# restarts a service nine times overnight for no reason.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# --- hardening ---------------------------------------------------------------
+# This process reads a jar and talks to loopback Postgres. It has no reason to
+# write anywhere, gain privileges, or see the rest of the filesystem.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
