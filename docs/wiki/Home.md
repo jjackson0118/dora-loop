@@ -49,7 +49,8 @@ Non-obvious decisions are recorded as ADRs in the repository:
 [0001 change failure rate](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0001-change-failure-rate-joins-incidents.md),
 [0002 lead time per change](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0002-lead-time-is-per-change.md),
 [0003 suspect input is a signal](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0003-suspect-input-is-a-signal.md),
-[0004 thresholds are configurable](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0004-thresholds-are-configurable.md).
+[0004 thresholds are configurable](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0004-thresholds-are-configurable.md),
+[0005 verification is independent evidence](https://github.com/jjackson0118/dora-loop/blob/main/docs/adr/0005-verification-is-independent-evidence.md).
 
 ## Honest limits
 
