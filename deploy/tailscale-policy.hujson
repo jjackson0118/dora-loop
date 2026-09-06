@@ -12,7 +12,9 @@
 // SSH private key exists to be stolen from GitHub secrets, because Tailscale SSH
 // authenticates by tailnet identity rather than by a key the repository holds.
 {
-  // Tags are identities that belong to the tailnet rather than to a person, so
+  // MERGE these into the existing tagOwners block -- this tailnet already has
+  // one, for tag:edge. Tags are identities that belong to the tailnet rather
+  // than to a person, so
   // a machine keeps working when a human's session expires -- and, more to the
   // point here, so the CI node's authority is described by what it is tagged
   // rather than by whose account minted it.
@@ -29,10 +31,13 @@
     // Deliberately NOT opening 8080. CI has no reason to reach the application
     // port: the smoke test runs ON the target, over loopback, because a smoke
     // test that verifies a port the user never uses proves the wrong thing.
+    // Written in the same dialect as the rest of this tailnet's policy: the
+    // port goes in "ip" rather than appended to "dst". Both forms are valid;
+    // matching the surrounding file matters more than which one is canonical.
     {
-      "action": "accept",
-      "src":    ["tag:ci"],
-      "dst":    ["tag:deploy-target:22"],
+      "src": ["tag:ci"],
+      "dst": ["tag:deploy-target"],
+      "ip":  ["22"],
     },
   ],
 
