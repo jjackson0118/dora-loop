@@ -19,6 +19,13 @@ spring:
     # "value": null and not be omitted, or typed clients read it as zero.
     default-property-inclusion: always
 
+# The shared secret for the write endpoints. Empty means ingest is REFUSED, not
+# open: see IngestAuthFilter. There is deliberately no default value, because a
+# default here would be the credential everyone deploys with.
+dora:
+  ingest:
+    token: ${DORA_INGEST_TOKEN:}
+
 server:
   shutdown: graceful
   port: ${PORT:8080}

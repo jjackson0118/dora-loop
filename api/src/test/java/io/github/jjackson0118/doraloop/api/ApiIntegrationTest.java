@@ -66,7 +66,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * make a later test pass, and it matches how the deploy smoke test will address
  * its own synthetic service.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = "dora.ingest.token=apiintegrationtest-secret")
 @Testcontainers
 class ApiIntegrationTest {
 
@@ -1750,6 +1751,7 @@ class ApiIntegrationTest {
     private ResponseEntity<String> post(String path, String json) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.set(IngestAuthFilter.HEADER, "apiintegrationtest-secret");
         return http.postForEntity(path, new HttpEntity<>(json, headers), String.class);
     }
 
