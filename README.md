@@ -4,10 +4,10 @@ A library that computes the four DORA metrics — deployment frequency, lead tim
 for changes, change failure rate, and time to restore — from deployment and
 incident events.
 
-**Status: `core` and `api` are built and manually deployed on a private VM.**
-CI deployment orchestration is implemented with isolated failure tests; its
-first authenticated GitHub Actions rehearsal is still pending. See
-[deployment setup](docs/wiki/Deployment.md).
+**Status: CI builds, gates, deploys, and smoke-verifies the service on a private VM.**
+The [first successful authenticated deployment](https://github.com/jjackson0118/dora-loop/actions/runs/34049531919/attempts/2)
+completed on 2026-09-06. The served build identity matched the merged commit.
+See [deployment evidence and setup](docs/wiki/Deployment.md).
 The intended end state is that the pipeline deploying this service also posts its
 own deployment events back into it — the pipeline as both subject and source of
 its own measurements. That loop is **not built**. See the Roadmap.
@@ -61,9 +61,9 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 
 ## Roadmap
 
-- A deploy step in the pipeline that posts its own `DeploymentEvent` back here,
-  which is what closes the loop the name refers to. **Not built yet** — nothing
-  is deployed, so the loop is a design, not a running thing.
+- Have the working deploy pipeline post its own `DeploymentEvent` back here.
+  **Event reporting is not built yet**, so the measurement loop remains open.
+  Add the orthogonal verification field so inconclusive checks remain explicit.
 - Bounding the report query, which currently loads a service's whole history
   and windows it in memory.
 

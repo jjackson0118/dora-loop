@@ -235,6 +235,26 @@ not rollback completion; recovery success or failure is in the job log and exit
 status. The application token is neither uploaded nor
 included in that artifact.
 
-Validation so far is isolated orchestration and transport testing, not an
-authenticated Actions deployment. Event reporting (#21) and its verification
-field (#62) remain separate work.
+## First successful CI deployment
+
+On 2026-09-06, [run 34049531919, attempt 2](https://github.com/jjackson0118/dora-loop/actions/runs/34049531919/attempts/2)
+completed successfully for commit `49ebcf8058d02e212befdf92cb6bd944cc7dee3e`.
+The gates, artifact build, ephemeral Tailscale connection, release activation,
+smoke verification, and evidence upload passed. An independent read of the VM
+confirmed HTTP 200 readiness and that `/actuator/info`, `current`, and
+`last-good` all identified that same commit.
+
+Attempt 1 stopped at authentication because the repository secret values were
+misconfigured. It never activated a release. Correcting the values and rerunning
+the failed job produced the successful run above; the successful build alone
+was not treated as evidence of deployment.
+
+The deployment suite also passed 44 isolated checks: 19 decision cases,
+14 orchestration scenarios, 9 transport scenarios, and 2 controls exercising
+the actual rollback ownership guard. Those cases cover failures without
+injecting defects into the live VM. This successful live run demonstrates the
+happy path; it does not claim a live CI rollback rehearsal or external-user
+reachability. Smoke runs on the target against its configured bridge listener.
+
+Event reporting and its orthogonal verification field remain separate work.
+The service is deployed; the pipeline does not yet post its own deployment events.
