@@ -4,10 +4,10 @@ A library that computes the four DORA metrics — deployment frequency, lead tim
 for changes, change failure rate, and time to restore — from deployment and
 incident events.
 
-**Status: `core` and `api` are built; nothing is deployed yet.** The domain
-model, the metrics, and an HTTP service that ingests events and serves reports
-all exist and are tested. There is still no deploy step — CI runs gates and
-publishes reports, and nothing runs the service anywhere.
+**Status: `core` and `api` are built and manually deployed on a private VM.**
+CI deployment orchestration is implemented with isolated failure tests; its
+first authenticated GitHub Actions rehearsal is still pending. See
+[deployment setup](docs/wiki/Deployment.md).
 The intended end state is that the pipeline deploying this service also posts its
 own deployment events back into it — the pipeline as both subject and source of
 its own measurements. That loop is **not built**. See the Roadmap.

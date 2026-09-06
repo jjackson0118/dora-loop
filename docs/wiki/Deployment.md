@@ -61,7 +61,7 @@ Two environment files, on purpose.
 | File | Written by | Contains |
 |---|---|---|
 | `/etc/dora-loop/db.env` | provisioning, once | the database URL, user and password |
-| `/etc/dora-loop/app.env` | every deploy | `DORA_INGEST_TOKEN`, `DORA_BUILD_SHA` |
+| `/etc/dora-loop/app.env` | operator bootstrap / token rotation | `DORA_INGEST_TOKEN` |
 
 The database password is generated on the host and never transmitted. The
 application and the database share a machine and speak over loopback, so it does
@@ -128,8 +128,9 @@ mints a short-lived, tagged, ephemeral node and nothing else.
 **The grant is one tag to one tag on one port.** Not an address — an address is a
 fact about today's network, and a tag is a statement about the machine's role,
 which survives a rebuild. Port 8080 is deliberately not opened to CI: the smoke
-test runs on the target over loopback, because a smoke test that exercises a port
-no user goes through proves the wrong thing.
+test runs on the target against its consumer-facing bridge listener. This verifies
+that listener and product behavior; it does not establish reachability from the
+consumer's machine.
 
 Combined with the `deploy` account's three `systemctl` verbs, that policy is the
 complete blast radius of a compromised pipeline.
@@ -145,9 +146,8 @@ development — the logic is testable independently of the transport.
 **`remote-release.sh`** activates a release, and refuses to activate one it
 cannot vouch for. It verifies the jar's sha256 (a truncated transfer is a file
 that exists, looks plausible, and fails at class-load time minutes later,
-looking like a code problem); it verifies that `app.env` already carries this
-release's identity, so a deploy whose environment step failed stops *before*
-flipping the symlink rather than after; and once restarted it reads back both
+looking like a code problem); it verifies that `app.env` already carries an ingest token before
+flipping the symlink; and once restarted it reads back both
 the symlink and `/actuator/info` and fails if either disagrees with what was
 deployed.
 
@@ -187,7 +187,54 @@ it works when the network is down, when the registry is down, and when the
 build that produced the current release is no longer reproducible. That is why
 releases are kept side by side.
 
-It also restores the build identity in `app.env`. Without that, a rolled-back
-service would keep reporting the release it had just backed away from, and an
-operator checking whether the rollback worked would be told it had not.
+Build identity is stamped into the jar. Rollback preserves `app.env` and reads
+identity from the restored application's `/actuator/info` endpoint.
 
+
+## CI configuration
+
+Repository Actions secrets: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`.
+Create the Tailscale OAuth client with writable `auth_keys` scope and `tag:ci`.
+Repository Actions variables: `DEPLOY_HOST` (the VM's Tailscale IP or hostname)
+and `SMOKE_URL` (the VM's consumer-facing bridge URL, including port 8080).
+Keep deployment-specific addresses in these variables, outside this public repo. The latter is intentionally explicit rather than
+silently defaulting to loopback. Apply the policy fragment and provision the
+target first. Bootstrap one verified release and the ingest token on the host;
+CI preserves that token and requires a populated `last-good`.
+
+Only pushes to main deploy, after both the reusable pinned gates and the deploy
+script tests pass. PR jobs never join the tailnet. GitHub concurrency serializes
+`deploy-vm` with cancellation disabled. A target-side orchestration lock spans
+staging, activation, smoke and recovery. Manual mechanisms still have their
+existing deploy lock and compare-and-swap checks.
+
+`ci-deploy.sh` streams a complete bundle through Tailscale SSH. Failed upload
+never invokes activation. `remote-orchestrate.sh` checks the received jar,
+publishes a new immutable release directory, snapshots `last-good` before
+activation, and passes that snapshot to both activation and recovery. Existing
+release bytes cannot be overwritten. A rerun whose SHA is already current fails
+unverified for operator inspection instead of claiming a new verified deployment.
+
+Smoke uses a new remote report directory and a timestamp taken on that same
+machine. Both its process exit and report must agree. Explicit remote recovery
+replaces a broad GitHub `if: failure()` rollback: activation failure after the
+flip or an agreed smoke defect triggers recovery; missing/unreadable/inconclusive
+evidence keeps the candidate and fails the job. Recovery checks candidate
+ownership again under the rollback lock, refusing to withdraw a peer's release.
+The activation script's `last-good` means activation/read-back verified; it
+advances before smoke and remains advanced for KEEP_UNVERIFIED. It must not be
+interpreted as smoke verification.
+
+Cancellation or SSH loss can interrupt these mechanisms. Such a run fails and
+requires inspecting `current`, `last-good` and the retained remote bundle;
+there is no claim of automatic recovery across SIGKILL. Remote bundles are
+retained under `/tmp/dora-ci.*` for recovery evidence (and need periodic operator
+cleanup). The Actions artifact contains the prior target, start epoch, decision,
+and smoke report when available. The decision file describes the smoke verdict,
+not rollback completion; recovery success or failure is in the job log and exit
+status. The application token is neither uploaded nor
+included in that artifact.
+
+Validation so far is isolated orchestration and transport testing, not an
+authenticated Actions deployment. Event reporting (#21) and its verification
+field (#62) remain separate work.
