@@ -1,6 +1,7 @@
 ### dora-loop
 
 - [Home](Home.md)
+- [Local quickstart](Local-Quickstart.md)
 - [Why it exists](Why-It-Exists.md)
 - [Verification](Verification.md)
 - [Authentication and exposure](Authentication-And-Exposure.md)

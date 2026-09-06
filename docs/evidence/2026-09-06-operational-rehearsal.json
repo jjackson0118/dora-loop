@@ -1,0 +1,241 @@
+{
+  "scope": "isolated real target orchestrator; not GitHub/Tailscale transport",
+  "scenarios": [
+    {
+      "scenario": "smoke-defect",
+      "exit_code": 1,
+      "before": {
+        "current": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "last_good": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "9a7159ec65eb2df1d2bba218d529edfb360affef",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "after": {
+        "current": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "last_good": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "9a7159ec65eb2df1d2bba218d529edfb360affef",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "event": {
+        "changes": [
+          {
+            "authoredAt": "2026-09-06T14:38:36-04:00",
+            "commitSha": "259a4f200215b15c622da727fe29d2b802fa1434"
+          }
+        ],
+        "deployedAt": "2026-09-06T19:00:35+00:00",
+        "environment": "production",
+        "id": "rehearsal:smoke-defect:1788721230777876506",
+        "outcome": "ROLLED_BACK",
+        "service": "dora-loop",
+        "verification": "VERIFIED"
+      },
+      "smoke_report": {
+        "gate": "smoke",
+        "status": "fail",
+        "exit_code": 1,
+        "findings": 1,
+        "rules": [
+          "product-endpoint-failed"
+        ],
+        "scanned": 3,
+        "scanned_unit": "checks against the deployed service",
+        "tool": "curl",
+        "duration_s": 0,
+        "note": "performed 3 checks against http://127.0.0.1:18080"
+      },
+      "decision": "decision=ROLLBACK reason=product-endpoint-failed verification=VERIFIED",
+      "status": "ACKNOWLEDGED: final event accepted by ingest",
+      "database_outcome": "ROLLED_BACK/VERIFIED",
+      "event_sha256": "59f2428e79800009ecac3c451e543028b524623fc2a2cfcf502d8ce4f3614908",
+      "event_counts": [
+        7,
+        8
+      ],
+      "replay_receipts": [],
+      "receipt": {
+        "disposition": "STORED",
+        "httpStatus": 201,
+        "id": "rehearsal:smoke-defect:1788721230777876506"
+      }
+    },
+    {
+      "scenario": "inconclusive",
+      "exit_code": 2,
+      "before": {
+        "current": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "last_good": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "9a7159ec65eb2df1d2bba218d529edfb360affef",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "after": {
+        "current": "/opt/dora-loop/releases/259a4f200215b15c622da727fe29d2b802fa1434",
+        "last_good": "/opt/dora-loop/releases/259a4f200215b15c622da727fe29d2b802fa1434",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "259a4f200215b15c622da727fe29d2b802fa1434",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "event": {
+        "changes": [
+          {
+            "authoredAt": "2026-09-06T14:38:36-04:00",
+            "commitSha": "259a4f200215b15c622da727fe29d2b802fa1434"
+          }
+        ],
+        "deployedAt": "2026-09-06T19:00:51+00:00",
+        "environment": "production",
+        "id": "rehearsal:inconclusive:1788721247137060908",
+        "outcome": "SUCCESS",
+        "service": "dora-loop",
+        "verification": "UNVERIFIED"
+      },
+      "smoke_report": {
+        "gate": "smoke",
+        "status": "error",
+        "exit_code": 2,
+        "findings": 0,
+        "rules": [],
+        "scanned": null,
+        "scanned_unit": "checks against the deployed service",
+        "tool": "curl",
+        "duration_s": 0,
+        "note": "cannot resolve the host in SMOKE_URL (http://dora-rehearsal.invalid:8080) -- misconfigured, not unhealthy"
+      },
+      "decision": "decision=KEEP_UNVERIFIED reason=smoke-could-not-run verification=UNVERIFIED",
+      "status": "ACKNOWLEDGED: final event accepted by ingest",
+      "database_outcome": "SUCCESS/UNVERIFIED",
+      "event_sha256": "9462d1a785ffdc78067762f5f5d768868bf4f99f02f0a32c882d3eb784e410dc",
+      "event_counts": [
+        8,
+        9
+      ],
+      "replay_receipts": [],
+      "receipt": {
+        "disposition": "STORED",
+        "httpStatus": 201,
+        "id": "rehearsal:inconclusive:1788721247137060908"
+      }
+    },
+    {
+      "scenario": "delivery-failure",
+      "exit_code": 2,
+      "before": {
+        "current": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "last_good": "/opt/dora-loop/releases/9a7159ec65eb2df1d2bba218d529edfb360affef",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "9a7159ec65eb2df1d2bba218d529edfb360affef",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "after": {
+        "current": "/opt/dora-loop/releases/259a4f200215b15c622da727fe29d2b802fa1434",
+        "last_good": "/opt/dora-loop/releases/259a4f200215b15c622da727fe29d2b802fa1434",
+        "info": {
+          "build": {
+            "artifact": "api",
+            "name": "api",
+            "version": "0.1.0-SNAPSHOT",
+            "sha": "259a4f200215b15c622da727fe29d2b802fa1434",
+            "group": "io.github.jjackson0118"
+          }
+        },
+        "readiness": 200
+      },
+      "event": {
+        "changes": [
+          {
+            "authoredAt": "2026-09-06T14:38:36-04:00",
+            "commitSha": "259a4f200215b15c622da727fe29d2b802fa1434"
+          }
+        ],
+        "deployedAt": "2026-09-06T19:01:01+00:00",
+        "environment": "production",
+        "id": "rehearsal:delivery-failure:1788721256638064198",
+        "outcome": "SUCCESS",
+        "service": "dora-loop",
+        "verification": "VERIFIED"
+      },
+      "smoke_report": {
+        "gate": "smoke",
+        "status": "pass",
+        "exit_code": 0,
+        "findings": 0,
+        "rules": [],
+        "scanned": 3,
+        "scanned_unit": "checks against the deployed service",
+        "tool": "curl",
+        "duration_s": 0,
+        "note": "performed 3 checks against http://127.0.0.1:8080"
+      },
+      "decision": "decision=KEEP reason=smoke-passed verification=VERIFIED",
+      "status": "DELIVERY_FAILED: replay event.json unchanged; receipt absent",
+      "database_outcome": "SUCCESS/VERIFIED",
+      "event_sha256": "97368e7b77529bde24cee97e87a6eba0313ce54ce0ddb580243270f9789357c8",
+      "event_counts": [
+        9,
+        9,
+        10,
+        10
+      ],
+      "replay_receipts": [
+        {
+          "disposition": "STORED",
+          "httpStatus": 201,
+          "id": "rehearsal:delivery-failure:1788721256638064198"
+        },
+        {
+          "disposition": "DUPLICATE",
+          "httpStatus": 200,
+          "id": "rehearsal:delivery-failure:1788721256638064198"
+        }
+      ],
+      "receipt": {
+        "disposition": "DUPLICATE",
+        "httpStatus": 200,
+        "id": "rehearsal:delivery-failure:1788721256638064198"
+      }
+    }
+  ],
+  "date": "2026-09-06",
+  "harness_sha256": {
+    "tools/rehearse-deployment.py": "8152fd46637c72c4f22931d5549d849a4d5d2ce00ea7ee631422b13f2970495f",
+    "tools/rehearsal-target.py": "144106d79e02cc8f8278b25055e37e9ee6e495e3a888a69a73ec25f374c5e8d1"
+  }
+}

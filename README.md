@@ -8,9 +8,11 @@ incident events.
 The [first successful authenticated deployment](https://github.com/jjackson0118/dora-loop/actions/runs/34049531919/attempts/2)
 completed on 2026-09-06. The served build identity matched the merged commit.
 See [deployment evidence and setup](docs/wiki/Deployment.md).
-The intended end state is that the pipeline deploying this service also posts its
-own deployment events back into it — the pipeline as both subject and source of
-its own measurements. That loop is **not built**. See the Roadmap.
+The pipeline posts its own deployment events back into the service. The
+[observed delivery loop](#observed-delivery-loop) records the live evidence.
+
+To reproduce the build and try the API without private infrastructure, follow
+[the local quickstart](docs/wiki/Local-Quickstart.md).
 
 ## The rule everything else follows from
 
@@ -28,7 +30,9 @@ silently reversing.
 
 ## Build
 
-Requires JDK 21. Gradle comes from the wrapper — nothing to install.
+Requires JDK 21 and an accessible Docker daemon for the PostgreSQL integration
+tests. Gradle comes from the wrapper; first use downloads Gradle, dependencies
+and container images. Core-only tests do not require Docker.
 
 ```bash
 ./gradlew build      # compile + test
@@ -60,6 +64,26 @@ Non-obvious choices are recorded in [`docs/adr/`](docs/adr/):
 4. [Thresholds are a per-service value, not compiled-in constants](docs/adr/0004-thresholds-are-configurable.md)
 5. [Verification is independent deployment evidence](docs/adr/0005-verification-is-independent-evidence.md)
 
+## Review or reproduce
+
+Start with the [local quickstart](https://github.com/jjackson0118/dora-loop/wiki/Local-Quickstart)
+to build, test, and exercise the API without deployment credentials. For review,
+follow the [design decisions](docs/adr/) and
+[operational failure evidence](docs/operational-rehearsal.md). The
+[delivery-gates repository](https://github.com/jjackson0118/delivery-gates)
+contains the portable gate contract and fault proofs.
+
+```mermaid
+flowchart LR
+    Commit[Commit] --> Gates[CI gates]
+    Gates --> Deploy[Immutable release]
+    Deploy --> Smoke[Smoke verification]
+    Smoke --> Recovery[Keep or guarded rollback]
+    Recovery --> Event[Replayable deployment event]
+    Event --> API[DORA API and database]
+    API --> Report[Metrics and evidence quality]
+```
+
 ## Observed delivery loop
 
 [CI run 34051994184](https://github.com/jjackson0118/dora-loop/actions/runs/34051994184)
@@ -80,6 +104,6 @@ this repository live in
 [`delivery-gates`](https://github.com/jjackson0118/delivery-gates), which also
 uses it as a fixture.
 
-## ## License
+## License
 
 Apache-2.0.

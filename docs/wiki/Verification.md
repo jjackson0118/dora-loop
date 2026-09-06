@@ -41,3 +41,16 @@ truncate the count, and it would have reported 24 the first time. A write bounda
 raises mid-write and asserting nothing survives, rather than by reading the
 annotation — a review that read the annotation source in isolation concluded the
 boundary was inert, and measurement showed it was not.
+
+## Deployment and event reporting
+
+[Deployment](Deployment.md) records authenticated deployment evidence and the
+limits of live coverage. [Local quickstart](Local-Quickstart.md) lists the Java,
+shell and Python test commands and provides a disposable API reproduction.
+The deployment-helper tests exercise smoke decisions, guarded recovery,
+transport, full-history payload generation and acknowledged event delivery;
+they are isolated fixture proofs, distinct from a live deployment rehearsal.
+
+## Operational failure evidence
+
+The [isolated real-service rehearsal](https://github.com/jjackson0118/dora-loop/blob/main/docs/operational-rehearsal.md) records actual rollback, inconclusive retention, failed event delivery and stable replay. It exercises the target orchestrator; GitHub/Tailscale failure transport and incident recovery metrics remain outside that proof.
