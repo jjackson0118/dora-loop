@@ -42,6 +42,42 @@ a `definitionOfWrong` describing how that particular number could mislead you.
 All of it is asserted by tests, because all of it is one refactor from
 silently reversing.
 
+## What a report looks like
+
+Nobody needs to build or deploy this to see the rule hold. This is the live
+report for the service itself, captured on the deploy target on 2026-09-07 after
+the pipeline had recorded five of its own deployments and no incidents
+([full capture](docs/evidence/2026-09-07-live-report.json), including the
+served build identity, the deployment event, its replay, and the refused
+unauthenticated writes):
+
+```json
+{
+  "service": "dora-loop",
+  "metrics": [
+    { "name": "deployment_frequency",  "state": "DEGRADED",   "value": 0.17, "unit": "deploys/day", "observedN": 5, "definitionOfWrong": "< 1.0 deploys/day" },
+    { "name": "lead_time_for_changes", "state": "OK",         "value": 0.05, "unit": "hours",       "observedN": 5, "definitionOfWrong": "> 24.0 hours (median)" },
+    { "name": "change_failure_rate",   "state": "OK",         "value": 0.0,  "unit": "percent",     "observedN": 5, "definitionOfWrong": "> 15.0 percent" },
+    { "name": "time_to_restore",       "state": "UNOBSERVED", "value": null, "unit": "hours",       "observedN": 0, "definitionOfWrong": "> 24.0 hours (median)" }
+  ],
+  "summary": { "degraded": ["deployment_frequency"], "unobserved": ["time_to_restore", "data_quality.suspect_incidents"] }
+}
+```
+
+Three lines carry the argument. `change_failure_rate` is `0.0` with
+`observedN: 5` — a zero that five deployments stand behind. `time_to_restore`
+is `null` with `observedN: 0` — no incident has ever been recorded, and the
+service refuses to call that "0 hours". They look alike on every dashboard that
+collapses them, and they mean opposite things. The third is
+`deployment_frequency`: `DEGRADED`, because a demo that deploys five times in a
+month is below the threshold it was given, and the report says so rather than
+grading on a curve.
+
+The same capture shows a service that has never been reported on returning
+every metric `UNOBSERVED`, the last deployment event acknowledged `STORED`,
+the same event replayed and acknowledged `DUPLICATE` with no row added, and a
+write with no token — or the wrong one — refused with `403`.
+
 ## Build
 
 Requires JDK 21 and an accessible Docker daemon for the PostgreSQL integration
