@@ -11,6 +11,20 @@ See [deployment evidence and setup](docs/wiki/Deployment.md).
 The pipeline posts its own deployment events back into the service. The
 [observed delivery loop](#observed-delivery-loop) records the live evidence.
 
+## How this was built
+
+Built in two days by one person directing AI coding agents: Claude Opus 5 for
+roughly 80% of the work, Codex (GPT-6 Astra) for the deployment path and
+operational rehearsal after a mid-build handoff. The maintainer set scope and
+acceptance criteria and decided what counted as done; the agents implemented
+and reviewed each other's work adversarially.
+
+**The comments are the history.** The long source comments were written by the
+agents as each defect was found, and every one was left in on purpose: they are
+the record of the AI build as it happened. Read them as history, not as style.
+The full account is in
+[delivery-gates: How it was built](https://github.com/jjackson0118/delivery-gates/wiki/How-It-Was-Built).
+
 To reproduce the build and try the API without private infrastructure, follow
 [the local quickstart](docs/wiki/Local-Quickstart.md).
 
@@ -53,6 +67,7 @@ gate rather than living where no gate can reach them.
 | [Authentication and exposure](https://github.com/jjackson0118/dora-loop/wiki/Authentication-And-Exposure) | What needs a token, what is open on purpose, and the limits. |
 | [Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections) | Retries, rollbacks and resolutions arriving under an existing id. |
 | [Layout and design](https://github.com/jjackson0118/dora-loop/wiki/Layout-And-Design) | Module boundaries and the build invariants that hold them. |
+| [How it was built](https://github.com/jjackson0118/delivery-gates/wiki/How-It-Was-Built) | Two days, one person, two AI agents — and why every comment stayed. |
 
 ## Decisions
 
