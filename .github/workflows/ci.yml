@@ -19,9 +19,38 @@ jobs:
       - run: bash deploy/orchestrate-test.sh
       - run: bash deploy/ci-deploy-test.sh
       - run: python3 -m unittest discover -s deploy -p '*_test.py'
+  # The deploy target is a private VM that is deliberately shut down between
+  # working sessions rather than left reachable. A push to main while it is
+  # down should not spend twenty minutes failing a Tailscale ping and then
+  # leave a red run on the commit a reviewer lands on -- but it must not go
+  # quiet either, because "not deployed" is a fact about this commit that
+  # nobody should have to infer from a grey skip mark.
+  #
+  # So the deploy job runs only when DEPLOY_TARGET_ONLINE is exactly "true",
+  # and a companion job runs when it is not and says so in the run summary.
+  # Explicit rather than "unless false": an unset variable declares nothing,
+  # and this repository does not treat a missing declaration as a green one.
+  deploy-target-offline:
+    needs: [pipeline, deploy-scripts]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_TARGET_ONLINE != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record that this commit was not deployed
+        shell: bash
+        env:
+          ONLINE: ${{ vars.DEPLOY_TARGET_ONLINE }}
+        run: |
+          {
+            echo "## Not deployed"
+            echo
+            echo "\`DEPLOY_TARGET_ONLINE\` is \`${ONLINE:-unset}\`, so the deploy job did not run."
+            echo "Commit \`${GITHUB_SHA::7}\` passed the gates but is **not** on the target."
+            echo "Set the variable to \`true\` with the VM up and re-run, or push again."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::deploy target declared offline (DEPLOY_TARGET_ONLINE=${ONLINE:-unset}); ${GITHUB_SHA::7} was not deployed"
   deploy:
     needs: [pipeline, deploy-scripts]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_TARGET_ONLINE == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:

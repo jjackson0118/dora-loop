@@ -207,8 +207,14 @@ identity from the restored application's `/actuator/info` endpoint.
 
 Repository Actions secrets: `TS_OAUTH_CLIENT_ID`, `TS_OAUTH_SECRET`.
 Create the Tailscale OAuth client with writable `auth_keys` scope and `tag:ci`.
-Repository Actions variables: `DEPLOY_HOST` (the VM's Tailscale IP or hostname)
-and `SMOKE_URL` (the VM's consumer-facing bridge URL, including port 8080).
+Repository Actions variables: `DEPLOY_HOST` (the VM's Tailscale IP or hostname),
+`SMOKE_URL` (the VM's consumer-facing bridge URL, including port 8080), and
+`DEPLOY_TARGET_ONLINE`, which must be exactly `true` for the deploy job to run.
+The VM is shut down between working sessions on purpose; set the variable to
+anything else (or leave it unset) before shutting it down and a push to main
+runs a `deploy-target-offline` job instead, which succeeds but writes "Not
+deployed" and the commit into the run summary. A missing declaration is not
+treated as online.
 Keep deployment-specific addresses in these variables, outside this public repo. The latter is intentionally explicit rather than
 silently defaulting to loopback. Apply the policy fragment and provision the
 target first. Bootstrap one verified release and the ingest token on the host;
