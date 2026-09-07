@@ -1,0 +1,199 @@
+{
+  "captured_at": "2026-09-07T12:48:44.509221665Z",
+  "how": "Captured on the deploy target over loopback after CI run 34120493093 attempt 3 deployed 43e9810. Write probes used the target-resident ingest token; the token is not in this file.",
+  "served_build": {
+    "build": {
+      "artifact": "api",
+      "name": "api",
+      "version": "0.1.0-SNAPSHOT",
+      "sha": "43e9810338c333adbaddec93e299574ef25f943c",
+      "group": "io.github.jjackson0118"
+    }
+  },
+  "readiness": {
+    "status": "UP"
+  },
+  "report_dora_loop_P30D": {
+    "service": "dora-loop",
+    "windowStart": "2026-08-08T12:48:44.532506206Z",
+    "windowEnd": "2026-09-07T12:48:44.532506206Z",
+    "metrics": [
+      {
+        "name": "deployment_frequency",
+        "state": "DEGRADED",
+        "value": 0.17,
+        "unit": "deploys/day",
+        "observedN": 5,
+        "definitionOfWrong": "< 1.0 deploys/day"
+      },
+      {
+        "name": "lead_time_for_changes",
+        "state": "OK",
+        "value": 0.05,
+        "unit": "hours",
+        "observedN": 5,
+        "definitionOfWrong": "> 24.0 hours (median)"
+      },
+      {
+        "name": "change_failure_rate",
+        "state": "OK",
+        "value": 0.0,
+        "unit": "percent",
+        "observedN": 5,
+        "definitionOfWrong": "> 15.0 percent"
+      },
+      {
+        "name": "time_to_restore",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "hours",
+        "observedN": 0,
+        "definitionOfWrong": "> 24.0 hours (median)"
+      }
+    ],
+    "dataQuality": [
+      {
+        "name": "data_quality.suspect_changes",
+        "state": "OK",
+        "value": 0.0,
+        "unit": "changes",
+        "observedN": 5,
+        "definitionOfWrong": "> 0.0 changes"
+      },
+      {
+        "name": "data_quality.suspect_incidents",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "incidents",
+        "observedN": 0,
+        "definitionOfWrong": "> 0.0 incidents"
+      },
+      {
+        "name": "data_quality.unverified_deployments",
+        "state": "OK",
+        "value": 0.0,
+        "unit": "deployments",
+        "observedN": 5,
+        "definitionOfWrong": "> 0 deployments"
+      }
+    ],
+    "summary": {
+      "degraded": [
+        "deployment_frequency"
+      ],
+      "unobserved": [
+        "time_to_restore",
+        "data_quality.suspect_incidents"
+      ]
+    }
+  },
+  "report_unknown_service": {
+    "service": "never-seen",
+    "windowStart": "2026-08-08T12:48:44.538710269Z",
+    "windowEnd": "2026-09-07T12:48:44.538710269Z",
+    "metrics": [
+      {
+        "name": "deployment_frequency",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "deploys/day",
+        "observedN": 0,
+        "definitionOfWrong": "< 1.0 deploys/day"
+      },
+      {
+        "name": "lead_time_for_changes",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "hours",
+        "observedN": 0,
+        "definitionOfWrong": "> 24.0 hours (median)"
+      },
+      {
+        "name": "change_failure_rate",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "percent",
+        "observedN": 0,
+        "definitionOfWrong": "> 15.0 percent"
+      },
+      {
+        "name": "time_to_restore",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "hours",
+        "observedN": 0,
+        "definitionOfWrong": "> 24.0 hours (median)"
+      }
+    ],
+    "dataQuality": [
+      {
+        "name": "data_quality.suspect_changes",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "changes",
+        "observedN": 0,
+        "definitionOfWrong": "> 0.0 changes"
+      },
+      {
+        "name": "data_quality.suspect_incidents",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "incidents",
+        "observedN": 0,
+        "definitionOfWrong": "> 0.0 incidents"
+      },
+      {
+        "name": "data_quality.unverified_deployments",
+        "state": "UNOBSERVED",
+        "value": null,
+        "unit": "deployments",
+        "observedN": 0,
+        "definitionOfWrong": "> 0 deployments"
+      }
+    ],
+    "summary": {
+      "degraded": [],
+      "unobserved": [
+        "deployment_frequency",
+        "lead_time_for_changes",
+        "change_failure_rate",
+        "time_to_restore",
+        "data_quality.suspect_changes",
+        "data_quality.suspect_incidents",
+        "data_quality.unverified_deployments"
+      ]
+    }
+  },
+  "last_deployment_event": {
+    "changes": [
+      {
+        "authoredAt": "2026-09-07T08:11:07-04:00",
+        "commitSha": "43e9810338c333adbaddec93e299574ef25f943c"
+      }
+    ],
+    "deployedAt": "2026-09-07T12:42:21+00:00",
+    "environment": "production",
+    "id": "jjackson0118/dora-loop:run:34120493093:attempt:3",
+    "outcome": "SUCCESS",
+    "service": "dora-loop",
+    "verification": "VERIFIED"
+  },
+  "last_delivery_receipt": {
+    "disposition": "STORED",
+    "httpStatus": 201,
+    "id": "jjackson0118/dora-loop:run:34120493093:attempt:3"
+  },
+  "replay_of_same_event": {
+    "httpStatus": 200,
+    "disposition": "DUPLICATE",
+    "note": "same payload re-posted with the token; no row added"
+  },
+  "write_without_token": {
+    "httpStatus": 403,
+    "title": "Ingest requires a token"
+  },
+  "write_with_wrong_token": {
+    "httpStatus": 403,
+    "title": "Ingest requires a token"
+  }
+}
