@@ -13,7 +13,8 @@ The pipeline posts its own deployment events back into the service. The
 
 ## How this was built
 
-Built in two days by one person directing AI coding agents: Claude Opus 5 for
+Built over one weekend (4–6 September 2026, with review and documentation on
+the 7th) by one person directing AI coding agents: Claude Opus 5 for
 roughly 80% of the work, Codex (GPT-6 Astra) for the deployment path and
 operational rehearsal after a mid-build handoff. The maintainer set scope and
 acceptance criteria and decided what counted as done; the agents implemented
@@ -103,7 +104,7 @@ gate rather than living where no gate can reach them.
 | [Authentication and exposure](https://github.com/jjackson0118/dora-loop/wiki/Authentication-And-Exposure) | What needs a token, what is open on purpose, and the limits. |
 | [Replays and corrections](https://github.com/jjackson0118/dora-loop/wiki/Replays-And-Corrections) | Retries, rollbacks and resolutions arriving under an existing id. |
 | [Layout and design](https://github.com/jjackson0118/dora-loop/wiki/Layout-And-Design) | Module boundaries and the build invariants that hold them. |
-| [How it was built](https://github.com/jjackson0118/delivery-gates/wiki/How-It-Was-Built) | Two days, one person, two AI agents — and why every comment stayed. |
+| [How it was built](https://github.com/jjackson0118/delivery-gates/wiki/How-It-Was-Built) | One weekend, one person, two AI agents — and why every comment stayed. |
 
 ## Decisions
 
